@@ -9,7 +9,29 @@ This is a Model Context Protocol (MCP) server designed to assist Odoo Helpdesk a
 - **Search Documentation**: Searches official Odoo documentation for standard procedures and answers.
 - **Search Source Code**: Searches the Odoo GitHub repository to debug technical issues or error messages.
 
-## Setup
+## Deployment
+
+### Deploy to Railway (Cloud)
+
+This server is configured to run on [Railway](https://railway.app) using the SSE (Server-Sent Events) transport.
+
+1.  **Push code to GitHub**: (Already done in this case).
+2.  **Create a New Project on Railway**: Connect it to your GitHub repository.
+3.  **Set Environment Variables**: In the Railway dashboard, add the following variables:
+    *   `ODOO_URL`
+    *   `ODOO_DB`
+    *   `ODOO_USERNAME`
+    *   `ODOO_PASSWORD`
+4.  **Connect from Claude**: Once deployed, Railway will give you a public URL (e.g., `https://your-app.up.railway.app/sse`). Use this URL in your Claude Desktop config:
+    ```json
+    "odoo-helpdesk-cloud": {
+      "command": "curl",
+      "args": ["-s", "https://your-app.up.railway.app/sse"]
+    }
+    ```
+    *Note: Connecting to a remote SSE MCP server via curl/stdio bridge is one way, but many modern MCP clients support SSE URLs directly.*
+
+### Local Development
 
 1.  **Install Dependencies**:
     ```bash
@@ -17,34 +39,9 @@ This is a Model Context Protocol (MCP) server designed to assist Odoo Helpdesk a
     ```
 
 2.  **Configure Environment**:
-    Copy `.env.example` to `.env` and fill in your Odoo credentials.
+    Create a `.env` file from `.env.example`.
+
+3.  **Run with MCP Inspector**:
     ```bash
-    cp .env.example .env
+    npx @modelcontextprotocol/inspector python server.py
     ```
-    
-    *   `ODOO_URL`: The URL of your Odoo instance (e.g., `https://mycompany.odoo.com`).
-    *   `ODOO_DB`: The database name.
-    *   `ODOO_USERNAME`: Your Odoo username (email).
-    *   `ODOO_PASSWORD`: Your Odoo password or API Key.
-
-## Usage
-
-Run the server directly (for testing):
-```bash
-python server.py
-```
-
-### Connect to Claude Desktop
-
-Add this to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "odoo-helpdesk": {
-      "command": "python",
-      "args": ["/absolute/path/to/mcp-odoo-xfiles/server.py"]
-    }
-  }
-}
-```

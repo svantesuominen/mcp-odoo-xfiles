@@ -1,4 +1,5 @@
 import os
+import sys
 import xmlrpc.client
 from typing import List, Dict, Any, Union
 from fastmcp import FastMCP
@@ -438,4 +439,12 @@ def get_tickets_for_analysis(start_date: str, end_date: str = None, limit: int =
         return [{"error": f"Error fetching tickets for analysis: {str(e)}"}]
 
 if __name__ == "__main__":
-    mcp.run()
+    port_env = os.getenv("PORT")
+    if port_env:
+        # Production/Cloud mode: Run as SSE server
+        port = int(port_env)
+        print(f"Starting MCP SSE server on port {port}...", file=sys.stderr)
+        mcp.run(transport="sse", host="0.0.0.0", port=port)
+    else:
+        # Local mode: Run using standard I/O (stdio)
+        mcp.run(transport="stdio")
