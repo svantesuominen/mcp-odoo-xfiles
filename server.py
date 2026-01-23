@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from googlesearch import search as google_search
 import requests
 from datetime import datetime, timedelta
+from starlette.responses import JSONResponse
 
 # Load environment variables
 load_dotenv()
@@ -438,13 +439,19 @@ def get_tickets_for_analysis(start_date: str, end_date: str = None, limit: int =
     except Exception as e:
         return [{"error": f"Error fetching tickets for analysis: {str(e)}"}]
 
+@mcp.app.route("/")
+async def index(request):
+    """Health check endpoint for Railway."""
+    return JSONResponse({"status": "ok", "service": "Odoo Helpdesk MCP"})
+
 if __name__ == "__main__":
     port_env = os.getenv("PORT")
     if port_env:
         # Production/Cloud mode: Run as SSE server
         port = int(port_env)
-        print(f"Starting MCP SSE server on port {port}...", file=sys.stderr)
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+        # Use uvicorn directly to ensure the SSE routes are properly hosted
+        import uvicorn
+        uvicorn.run(mcp.app, host="0.0.0.0", port=port)
     else:
         # Local mode: Run using standard I/O (stdio)
         mcp.run(transport="stdio")
