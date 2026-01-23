@@ -1,0 +1,5 @@
+fastmcp
+python-dotenv
+requests
+googlesearch-python
+beautifulsoup4
