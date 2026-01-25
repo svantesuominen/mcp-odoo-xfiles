@@ -19,7 +19,7 @@ ODOO_USERNAME = os.getenv("ODOO_USERNAME")
 ODOO_PASSWORD = os.getenv("ODOO_PASSWORD") or os.getenv("ODOO_API_KEY")
 
 # Initialize MCP
-mcp = FastMCP("Odoo Helpdesk Agent")
+mcp = FastMCP("The X-Files ASteroid")
 
 def get_odoo_connection():
     if not all([ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD]):
@@ -442,16 +442,20 @@ def get_tickets_for_analysis(start_date: str, end_date: str = None, limit: int =
 @mcp.custom_route("/", methods=["GET"])
 async def index(request):
     """Health check endpoint for Railway."""
-    return JSONResponse({"status": "ok", "service": "Odoo Helpdesk MCP"})
+    return JSONResponse({
+        "status": "ok", 
+        "service": "The X-Files ASteroid",
+        "mcp_ready": True
+    })
 
 if __name__ == "__main__":
     port_env = os.getenv("PORT")
     if port_env:
         # Production/Cloud mode: Run as SSE server
         port = int(port_env)
-        # Use uvicorn directly to ensure the SSE routes are properly hosted
-        import uvicorn
-        uvicorn.run(mcp.http_app(), host="0.0.0.0", port=port)
+        # Using the built-in .run(transport="sse") is more robust as it handles
+        # all internal SSE middleware and CORS configuration automatically.
+        mcp.run(transport="sse", host="0.0.0.0", port=port)
     else:
         # Local mode: Run using standard I/O (stdio)
         mcp.run(transport="stdio")
