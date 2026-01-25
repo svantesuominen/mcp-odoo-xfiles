@@ -439,7 +439,7 @@ def get_tickets_for_analysis(start_date: str, end_date: str = None, limit: int =
     except Exception as e:
         return [{"error": f"Error fetching tickets for analysis: {str(e)}"}]
 
-@mcp.app.route("/")
+@mcp.custom_route("/", methods=["GET"])
 async def index(request):
     """Health check endpoint for Railway."""
     return JSONResponse({"status": "ok", "service": "Odoo Helpdesk MCP"})
@@ -451,7 +451,7 @@ if __name__ == "__main__":
         port = int(port_env)
         # Use uvicorn directly to ensure the SSE routes are properly hosted
         import uvicorn
-        uvicorn.run(mcp.app, host="0.0.0.0", port=port)
+        uvicorn.run(mcp.http_app(), host="0.0.0.0", port=port)
     else:
         # Local mode: Run using standard I/O (stdio)
         mcp.run(transport="stdio")
