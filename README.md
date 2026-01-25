@@ -1,27 +1,27 @@
-# 🚀 Odoo Helpdesk Agent MCP
+# Odoo Helpdesk Agent MCP
 
 A high-performance Model Context Protocol (MCP) server that empowers AI assistants (like Claude) to act as expert Odoo Helpdesk agents. It bridges the gap between Odoo's CRM/Helpdesk modules and your AI assistant, providing real-time data access and documentation lookup.
 
-## ✨ Features
+## Features
 
-- **🔍 Search Similar Tickets**: Intelligent search through historical helpdesk tickets to find proven solutions.
-- **💬 Conversation History**: Deep-dive into ticket logs, internal notes, and email history.
-- **📚 Documentation Link**: Automatic lookup in official Odoo documentation.
-- **💻 Source Code Analysis**: Direct integration with Odoo's GitHub repository for technical debugging.
-- **📊 Trend Analysis**: Ability to analyze ticket volumes and topics over custom date ranges.
+- **Search Similar Tickets**: Intelligent search through historical helpdesk tickets to find proven solutions.
+- **Conversation History**: Deep-dive into ticket logs, internal notes, and email history.
+- **Documentation Link**: Automatic lookup in official Odoo documentation.
+- **Source Code Analysis**: Direct integration with Odoo's GitHub repository for technical debugging.
+- **Trend Analysis**: Ability to analyze ticket volumes and topics over custom date ranges.
 
 ---
 
-## ☁️ Cloud Deployment (Railway)
+## Cloud Deployment (Railway)
 
 This server is optimized for deployment on [Railway](https://railway.app), leveraging the **SSE (Server-Sent Events) transport** for remote connectivity.
 
-### 1. 🚀 One-Click Setup
+### 1. One-Click Setup
 1. Fork this repository or push it to your GitHub.
 2. Create a **New Project** on Railway and connect it to your GitHub repo.
 3. Railway will automatically detect the `Procfile` and `requirements.txt`.
 
-### 2. 🔑 Environment Variables
+### 2. Environment Variables
 Configure the following in your Railway project settings:
 
 | Variable | Description |
@@ -32,7 +32,7 @@ Configure the following in your Railway project settings:
 | `ODOO_PASSWORD` | Your Odoo password or **API Key** (Recommended) |
 | `PORT` | Set automatically by Railway (used for SSE mode) |
 
-### 🤖 Connecting to Claude
+### Connecting to Claude
 Once deployed, Railway will provide a public URL (e.g., `https://mcp-odoo-production.up.railway.app`).
 
 #### Option A: Claude Desktop (Standard)
@@ -66,7 +66,7 @@ Add the following to your `claude_desktop_config.json`:
 
 ---
 
-## 🛠️ Local Development
+## Local Development
 
 ### Prerequisites
 - Python 3.10+
@@ -106,10 +106,10 @@ npx @modelcontextprotocol/inspector python server.py
 
 ---
 
-## 🛡️ Security Note
+## Security Note
 - **Never** commit your `.env` file.
 - Use **Odoo API Keys** instead of regular passwords whenever possible for improved security and audit logging.
 - Ensure your Railway app's public URL is kept private or properly secured if sensitive data is exposed.
 
-## ⚖️ License
+## License
 MIT
