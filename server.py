@@ -19,7 +19,7 @@ ODOO_USERNAME = os.getenv("ODOO_USERNAME")
 ODOO_PASSWORD = os.getenv("ODOO_PASSWORD") or os.getenv("ODOO_API_KEY")
 
 # Initialize MCP
-mcp = FastMCP("The X-Files ASteroid")
+mcp = FastMCP("Odoo Helpdesk Agent")
 
 def get_odoo_connection():
     if not all([ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD]):
@@ -444,7 +444,7 @@ async def index(request):
     """Health check endpoint for Railway."""
     return JSONResponse({
         "status": "ok", 
-        "service": "The X-Files ASteroid",
+        "service": "Odoo Helpdesk Agent",
         "mcp_ready": True
     })
 
