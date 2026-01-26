@@ -33,7 +33,7 @@ Configure the following in your Railway project settings:
 | `PORT` | Set automatically by Railway (used for SSE mode) |
 
 ### Connecting to Claude
-Once deployed, Railway will provide a public URL (e.g., `https://mcp-odoo-production.up.railway.app`).
+Once deployed, Railway will provide a public URL (e.g., `https://mcp-odoo-xfiles-production.up.railway.app`).
 
 #### Option A: Claude Desktop (Standard)
 Add the following to your `claude_desktop_config.json`:
@@ -41,12 +41,12 @@ Add the following to your `claude_desktop_config.json`:
 ```json
 {
   "mcpServers": {
-    "odoo-agent-cloud": {
+    "odoo-agent": {
       "command": "curl",
       "args": [
         "-s",
         "-N",
-        "https://your-railway-app.up.railway.app/sse"
+        "https://your-app-name.up.railway.app/sse"
       ]
     }
   }
@@ -57,12 +57,14 @@ Add the following to your `claude_desktop_config.json`:
 *Note: Requires a Claude Pro, Max, Team, or Enterprise plan.*
 
 1.  Open [Claude.ai](https://claude.ai) and click your **Profile Icon**.
-2.  Go to **Settings** > **Integrations** (or **Connectors**).
-3.  Scroll to the bottom and click **Add custom connector** (or "Add more").
-4.  Enter your Railway public SSE URL: `https://your-railway-app.up.railway.app/sse`
-5.  Click **Add**. Claude will now have access to your Odoo tools directly in the web chat!
+2.  Go to **Settings** > **Connectors**.
+3.  Click **Add custom connector**.
+4.  Enter the Name: **Odoo Helpdesk Agent**
+5.  Enter your Railway public URL with the `/sse` path:
+    `https://your-app-name.up.railway.app/sse`
+6.  Click **Add**. Claude will now have access to your Odoo tools!
 
-> **Pro Tip:** Modern MCP clients can connect directly to the SSE URL without needing the `curl` bridge.
+> **Pro Tip:** Always ensure the URL ends with `/sse` for the connection to work correctly.
 
 ---
 
