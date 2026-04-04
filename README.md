@@ -1,51 +1,59 @@
 # Odoo Helpdesk Agent MCP
 
-**Version:** 2026-04-04 (r2) | **Author:** Svante
+**Version:** 2026-04-04 (r3) | **Author:** Svante
 
-A Model Context Protocol (MCP) server that empowers AI assistants (like Claude) to act as expert Odoo Helpdesk agents. It bridges the gap between Odoo's Helpdesk module and your AI assistant, providing real-time ticket data, trend analysis, and documentation lookup.
+A Model Context Protocol (MCP) server that empowers AI assistants (like Claude) to act as expert agents for the Continuous Services team. Covers helpdesk, timesheets, backlog, R&D, and account management activity — all from a single MCP connection.
 
 ---
 
-## Available Tools
+## Tools
 
-### Helpdesk Tickets
-All ticket tools are scoped to **helpdesk team 2** and exclude Cancelled tickets.
+Tools are organized in two layers. **Layer 1** answers business questions directly. **Layer 2** goes deeper into specific data.
+
+All tools accept a `period` parameter: `"7d"` (last 7 days, default), `"1m"` (last 30 days), `"1q"` (last 90 days).
+
+---
+
+### Layer 1 — Business Questions
+
+| Tool | What it answers |
+| :--- | :--- |
+| `get_team_status(period)` | **The primary tool.** Full Continuous Services update across all 4 areas. Always formats output as a 4-section briefing: Customer Service / Tech Maintenance / Key Account Management / R&D & AI. |
+| `get_helpdesk_status(period)` | How is the helpdesk doing? Ticket volumes, stage breakdown, recent activity. |
+| `get_team_capacity(period)` | How busy is the team? Hours logged + full backlog per assignee with weeks-to-clear estimates. |
+| `get_sales_activity(period)` | What account management & sales work happened? Completed activities on CRM opportunities and customer contacts. |
+
+**Default output format for `get_team_status`:**
+```
+Continuous Services [weekly/monthly/quarterly] update:
+1. Customer Service: [3 sentences, max 300 chars, numbers & lists]
+2. Tech Maintenance: [3 sentences, max 300 chars, numbers & lists]
+3. Key Account Management: [3 sentences, max 300 chars, numbers & lists]
+4. R&D & AI: [3 sentences, max 300 chars, numbers & lists]
+```
+
+---
+
+### Layer 2 — Deep Dives
 
 | Tool | Description |
 | :--- | :--- |
-| `search_similar_tickets` | Search tickets by keyword in name and description |
-| `get_recent_tickets` | Most recently created tickets, optionally filtered by stage |
-| `get_recently_updated_tickets` | Tickets ordered by last modification date |
-| `get_ticket_details` | Full detail view of a single ticket by ID |
-| `get_ticket_conversation` | Message log and internal notes for a ticket |
-| `get_helpdesk_stages` | List all available pipeline stages |
-| `get_weekly_activity` | Created and updated ticket counts over N days |
-| `get_tickets_for_analysis` | Ticket content for a date range (topic/trend analysis) |
-| `get_issues_analysis` | Deep analysis over N months: most common, most laborious, and highest-priority issues with resolution time and tag clustering |
+| `get_team_backlog()` | Full task backlog for dept 18, grouped by stage and assignee with weeks/months-to-clear estimates (6 h/day capacity). |
+| `get_rd_hours(months)` | Logged R&D timesheet hours by project/task + all open R&D tasks assigned to the team. |
+| `get_issues_analysis(months)` | Multi-month trend analysis: most common, most laborious, and highest-priority helpdesk issues. |
+| `get_ticket_details(ticket_id)` | Full detail for a single ticket (description, assignee, stage, customer, tags). |
+| `get_ticket_conversation(ticket_id)` | Full message and internal note history for a ticket. |
+| `get_tickets_for_analysis(start_date, end_date)` | Raw ticket list for a date range — use for custom topic or trend analysis. |
+| `search_similar_tickets(query)` | Keyword search across ticket names and descriptions. |
+| `get_helpdesk_stages()` | List all helpdesk pipeline stages. |
+| `search_odoo_docs(query)` | Google search scoped to `odoo.com/documentation`. |
+| `search_odoo_github_code(query)` | Code search in the `odoo/odoo` GitHub repository. |
+| `get_server_info()` | Version, author, and connected Odoo instance metadata. |
 
-**Stage semantics:**
+**Stage semantics (helpdesk):**
 - **Solved** — issue resolved and closed.
 - **Approval** — work completed, waiting for customer confirmation.
-- **Cancelled** — excluded from all results (noise).
-
-### Timesheets & Project Work
-
-| Tool | Description |
-| :--- | :--- |
-| `get_rd_hours` | Logged hours on R&D projects by project/task + open R&D tasks assigned to the team |
-| `get_team_hours` | Department 18 hours split into customer vs internal, per employee |
-| `get_team_backlog` | Current project tasks for department 18 users grouped by pipeline stage with planned hours |
-
-### Documentation & Code
-| Tool | Description |
-| :--- | :--- |
-| `search_odoo_docs` | Google search scoped to `odoo.com/documentation` |
-| `search_odoo_github_code` | Code search in the `odoo/odoo` GitHub repository |
-
-### Server Info
-| Tool | Description |
-| :--- | :--- |
-| `get_server_info` | Returns version, author, and connected Odoo instance metadata |
+- **Cancelled** — excluded from all results.
 
 ---
 

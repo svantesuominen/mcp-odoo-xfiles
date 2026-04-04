@@ -34,6 +34,17 @@ mcp = FastMCP("Odoo Helpdesk Agent")
 
 _odoo_cache: Dict[str, Any] = {"uid": None, "models": None}
 
+def _parse_period(period: str):
+    """
+    Translate a period string into (start_datetime, start_date, days, label).
+    Accepted values: "7d" (default), "1m", "1q".
+    """
+    mapping = {"7d": (7, "weekly"), "1m": (30, "monthly"), "1q": (90, "quarterly")}
+    days, label = mapping.get(period, (7, "weekly"))
+    start_dt = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+    start_d  = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    return start_dt, start_d, days, label
+
 def get_odoo_connection():
     if not all([ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD]):
         raise ValueError("Missing Odoo credentials in environment variables")
@@ -92,78 +103,6 @@ def search_similar_tickets(query: str, limit: int = 5) -> List[Dict[str, Any]]:
         # Return error as a list with one item for visibility
         return [{"error": f"Error searching tickets: {str(e)}"}]
 
-@mcp.tool()
-def get_recent_tickets(limit: int = 5, stage_id: int = None) -> List[Dict[str, Any]]:
-    """
-    Get the most recent helpdesk tickets, ordered by creation date.
-    Can be filtered by stage_id if provided. Scoped to team 2; cancelled tickets are excluded.
-    Stages "Solved" and "Approval" indicate resolved tickets.
-    Returns keys: id, name, stage_id, team_id, user_id (assignee), partner_id (customer), priority, create_date, url.
-    ALWAYS include the 'url' in your response so the user can access the ticket directly.
-    """
-    try:
-        uid, models = get_odoo_connection()
-
-        domain = list(BASE_TICKET_DOMAIN)
-        if stage_id:
-            domain.append(('stage_id', '=', stage_id))
-
-        ticket_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
-            'helpdesk.ticket', 'search',
-            [domain],
-            {'limit': limit, 'order': 'create_date desc'})
-
-        if not ticket_ids:
-            return []
-
-        fields = ['id', 'name', 'stage_id', 'team_id', 'user_id', 'partner_id', 'priority', 'create_date']
-        tickets = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
-            'helpdesk.ticket', 'read',
-            [ticket_ids],
-            {'fields': fields})
-            
-        base_url = ODOO_URL.rstrip('/')
-        for ticket in tickets:
-            ticket['url'] = f"{base_url}/web#id={ticket['id']}&model=helpdesk.ticket&view_type=form"
-            
-        return tickets
-    except Exception as e:
-        return [{"error": f"Error fetching recent tickets: {str(e)}"}]
-
-@mcp.tool()
-def get_recently_updated_tickets(limit: int = 10) -> List[Dict[str, Any]]:
-    """
-    Get tickets that have been modified (or had messages sent) recently.
-    Useful for seeing active discussions or changes. Scoped to team 2; cancelled tickets are excluded.
-    Returns keys: id, name, stage_id, team_id, user_id, partner_id, priority, write_date, create_date, url.
-    ALWAYS include the 'url' in your response so the user can access the ticket directly.
-    """
-    try:
-        uid, models = get_odoo_connection()
-
-        ticket_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
-            'helpdesk.ticket', 'search',
-            [BASE_TICKET_DOMAIN],
-            {'limit': limit, 'order': 'write_date desc'})
-
-        if not ticket_ids:
-            return []
-
-        fields = ['id', 'name', 'stage_id', 'team_id', 'user_id', 'partner_id', 'priority', 'write_date', 'create_date']
-        tickets = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
-            'helpdesk.ticket', 'read',
-            [ticket_ids],
-            {'fields': fields})
-            
-        base_url = ODOO_URL.rstrip('/')
-        for ticket in tickets:
-            ticket['url'] = f"{base_url}/web#id={ticket['id']}&model=helpdesk.ticket&view_type=form"
-            
-        return tickets
-    except Exception as e:
-        return [{"error": f"Error fetching recently updated tickets: {str(e)}"}]
-
-@mcp.tool()
 def get_weekly_activity(days: int = 7) -> Dict[str, Any]:
     """
     Get a summary of ticket activity for the last N days (default 7).
@@ -743,7 +682,6 @@ def get_rd_hours(months: int = 3) -> Dict[str, Any]:
         return {'error': f'Error fetching R&D hours: {str(e)}'}
 
 
-@mcp.tool()
 def get_team_hours(days: int = 7) -> Dict[str, Any]:
     """
     Fetch all timesheet entries for the Continuous Services team (department 18)
@@ -999,7 +937,6 @@ def get_team_backlog() -> Dict[str, Any]:
         return {'error': f'Error fetching team backlog: {str(e)}'}
 
 
-@mcp.tool()
 def get_department_activities(days: int = 7) -> Dict[str, Any]:
     """
     Fetch completed (done) account management and sales activities logged by the
@@ -1142,30 +1079,333 @@ def get_department_activities(days: int = 7) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def get_weekly_update(days: int = 7) -> Dict[str, Any]:
+def get_team_status(period: str = "7d") -> Dict[str, Any]:
     """
-    Composite weekly report for the Continuous Services team (department 18).
-    Bundles four data streams into a single call:
-      1. helpdesk  – new and updated tickets in the period (get_weekly_activity)
-      2. timesheets – team hours logged, customer vs internal split (get_team_hours)
-      3. rd_hours   – R&D timesheet hours and open R&D tasks (get_rd_hours, last month)
-      4. activities – completed account management & sales activities on CRM and contacts (get_department_activities)
+    Full status update for the Continuous Services team (department 18).
+    Covers all four operational areas: customer service, tech maintenance,
+    key account management, and R&D & AI.
 
-    Use this as the primary entry point when asked for a weekly update, weekly summary,
-    or weekly report for the team.
+    Period options:
+      "7d" → last 7 days  (default, use for weekly updates)
+      "1m" → last 30 days (use for monthly reviews)
+      "1q" → last 90 days (use for quarterly overviews)
 
-    Args:
-        days: Number of days to look back (default 7).
+    Use this as the FIRST tool to call for any team update, status report,
+    weekly summary, monthly review, or quarterly overview.
 
-    Returns keys: days, helpdesk, timesheets, rd_hours, activities.
+    ALWAYS present the result in this exact format — no exceptions:
+
+    Continuous Services [period_label] update:
+    1. Customer Service: [3 sentences, max 300 chars total, focus on numbers and lists]
+    2. Tech Maintenance: [3 sentences, max 300 chars total, focus on numbers and lists]
+    3. Key Account Management: [3 sentences, max 300 chars total, focus on numbers and lists]
+    4. R&D & AI: [3 sentences, max 300 chars total, focus on numbers and lists]
+
+    period_label mapping: "7d" → "weekly", "1m" → "monthly", "1q" → "quarterly"
+
+    Section writing guide:
+    - Customer Service: highlight new_tickets, resolved_tickets, open_tickets; name top issues.
+    - Tech Maintenance: highlight total_hours, customer_pct, flag missing_hours > 2; note backlog size.
+    - Key Account Management: highlight crm_count + partner_count touchpoints; name top leads/accounts.
+    - R&D & AI: highlight logged_hours, project names, count of open tasks.
+    If a section has zero data, say so briefly (1 sentence).
     """
-    return {
-        'days': days,
-        'helpdesk':   get_weekly_activity(days),
-        'timesheets': get_team_hours(days),
-        'rd_hours':   get_rd_hours(months=1),
-        'activities': get_department_activities(days),
-    }
+    try:
+        uid, models = get_odoo_connection()
+        base_url = ODOO_URL.rstrip('/')
+        start_dt, start_d, days, period_label = _parse_period(period)
+
+        # ── Section 1: Customer Service (Helpdesk) ──────────────────────
+        new_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search_count',
+            [BASE_TICKET_DOMAIN + [('create_date', '>=', start_dt)]])
+
+        resolved_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search_count',
+            [BASE_TICKET_DOMAIN + [
+                ('write_date', '>=', start_dt),
+                '|', ('stage_id.name', 'ilike', 'solved'),
+                     ('stage_id.name', 'ilike', 'approv')
+            ]])
+
+        open_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search_count',
+            [BASE_TICKET_DOMAIN + [
+                ('stage_id.name', 'not ilike', 'solved'),
+                ('stage_id.name', 'not ilike', 'approv'),
+            ]])
+
+        top_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search',
+            [BASE_TICKET_DOMAIN + [('write_date', '>=', start_dt)]],
+            {'limit': 5, 'order': 'write_date desc'})
+        top_tickets = []
+        if top_ids:
+            raw = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                'helpdesk.ticket', 'read', [top_ids],
+                {'fields': ['id', 'name', 'stage_id']})
+            top_tickets = [{'name': t['name'],
+                            'stage': t['stage_id'][1] if t.get('stage_id') else '',
+                            'url': f"{base_url}/web#id={t['id']}&model=helpdesk.ticket&view_type=form"}
+                           for t in raw]
+
+        customer_service = {
+            'new_tickets': new_count,
+            'resolved_tickets': resolved_count,
+            'open_tickets': open_count,
+            'top_tickets': top_tickets,
+        }
+
+        # ── Section 2: Tech Maintenance (Timesheets + Backlog) ──────────
+        hours_data = get_team_hours(days)
+        backlog_tasks = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'project.task', 'search_count',
+            [[('stage_id.name', 'not ilike', 'done'),
+              ('stage_id.name', 'not ilike', 'cancel')]])
+        backlog_lines = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('stage_id.name', 'not ilike', 'done'),
+              ('stage_id.name', 'not ilike', 'cancel')]],
+            {'fields': ['allocated_hours'], 'limit': 2000})
+        backlog_hours = round(sum(t.get('allocated_hours') or 0.0 for t in backlog_lines), 1)
+
+        emp_summary = [
+            {'name': e['employee_name'],
+             'total_hours': e['total_hours'],
+             'customer_pct': e['customer_pct'],
+             'missing_hours': e['missing_hours']}
+            for e in (hours_data.get('by_employee') or [])
+        ]
+        tech_maintenance = {
+            'total_hours': hours_data.get('total_hours', 0.0),
+            'customer_hours': hours_data.get('customer_hours', 0.0),
+            'internal_hours': hours_data.get('internal_hours', 0.0),
+            'by_employee': emp_summary,
+            'backlog_tasks': backlog_tasks,
+            'backlog_hours': backlog_hours,
+        }
+
+        # ── Section 3: Key Account Management (Activities) ──────────────
+        act_data = get_department_activities(days)
+        top_crm = [{'lead_name': a['lead_name'], 'author': a['author'],
+                     'activity_type': a['activity_type'], 'date': a['date']}
+                   for a in (act_data.get('crm_activities') or [])[:5]]
+        top_partners = [{'partner_name': a['partner_name'], 'author': a['author'],
+                          'activity_type': a['activity_type'], 'date': a['date']}
+                        for a in (act_data.get('partner_activities') or [])[:5]]
+        key_account_management = {
+            'crm_count': act_data.get('crm_count', 0),
+            'partner_count': act_data.get('partner_count', 0),
+            'top_crm': top_crm,
+            'top_partners': top_partners,
+        }
+
+        # ── Section 4: R&D & AI ─────────────────────────────────────────
+        rd_lines = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [[('project_id.name', 'ilike', 'r&d'), ('date', '>=', start_d)]],
+            {'fields': ['unit_amount', 'project_id'], 'limit': 2000})
+        rd_by_proj: Dict[str, float] = {}
+        for line in rd_lines:
+            if line.get('project_id'):
+                pname = line['project_id'][1]
+                rd_by_proj[pname] = round(rd_by_proj.get(pname, 0.0) + line['unit_amount'], 2)
+        rd_logged = round(sum(rd_by_proj.values()), 2)
+
+        rd_task_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'project.task', 'search_count',
+            [[('project_id.name', 'ilike', 'r&d'),
+              ('stage_id.name', 'not ilike', 'done'),
+              ('stage_id.name', 'not ilike', 'cancel')]])
+        top_rd_tasks_raw = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('project_id.name', 'ilike', 'r&d'),
+              ('stage_id.name', 'not ilike', 'done'),
+              ('stage_id.name', 'not ilike', 'cancel')]],
+            {'fields': ['name', 'stage_id', 'allocated_hours'], 'limit': 5})
+        top_rd_tasks = [{'name': t['name'],
+                          'stage': t['stage_id'][1] if t.get('stage_id') else '',
+                          'allocated_hours': t.get('allocated_hours') or 0.0}
+                        for t in top_rd_tasks_raw]
+        rd_and_ai = {
+            'logged_hours': rd_logged,
+            'projects': [{'project_name': k, 'logged_hours': v}
+                         for k, v in sorted(rd_by_proj.items(), key=lambda x: -x[1])],
+            'open_tasks': rd_task_count,
+            'top_open_tasks': top_rd_tasks,
+        }
+
+        return {
+            'period': period,
+            'period_label': period_label,
+            'customer_service': customer_service,
+            'tech_maintenance': tech_maintenance,
+            'key_account_management': key_account_management,
+            'rd_and_ai': rd_and_ai,
+        }
+
+    except Exception as e:
+        return {'error': f'Error fetching team status: {str(e)}'}
+
+
+@mcp.tool()
+def get_helpdesk_status(period: str = "7d") -> Dict[str, Any]:
+    """
+    Detailed helpdesk status for the given period.
+    Covers ticket volumes, stage breakdown, and the most recently active tickets.
+
+    Period options: "7d" (default), "1m", "1q".
+
+    Use this when asked specifically about customer service, helpdesk health,
+    ticket volumes, or support queue — without needing the full team update.
+
+    Returns keys:
+        period, period_label, new_tickets, resolved_tickets, open_tickets,
+        stage_breakdown (dict stage → count),
+        recent_tickets (list with id, name, stage, create_date, write_date, url — up to 20).
+    """
+    try:
+        uid, models = get_odoo_connection()
+        base_url = ODOO_URL.rstrip('/')
+        start_dt, start_d, days, period_label = _parse_period(period)
+
+        new_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search_count',
+            [BASE_TICKET_DOMAIN + [('create_date', '>=', start_dt)]])
+
+        resolved_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search_count',
+            [BASE_TICKET_DOMAIN + [
+                ('write_date', '>=', start_dt),
+                '|', ('stage_id.name', 'ilike', 'solved'),
+                     ('stage_id.name', 'ilike', 'approv')
+            ]])
+
+        open_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search_count',
+            [BASE_TICKET_DOMAIN + [
+                ('stage_id.name', 'not ilike', 'solved'),
+                ('stage_id.name', 'not ilike', 'approv'),
+            ]])
+
+        recent_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search',
+            [BASE_TICKET_DOMAIN + [('write_date', '>=', start_dt)]],
+            {'limit': 20, 'order': 'write_date desc'})
+        recent_tickets = []
+        stage_breakdown: Dict[str, int] = {}
+        if recent_ids:
+            raw = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                'helpdesk.ticket', 'read', [recent_ids],
+                {'fields': ['id', 'name', 'stage_id', 'create_date', 'write_date']})
+            for t in raw:
+                sname = t['stage_id'][1] if t.get('stage_id') else 'Unknown'
+                stage_breakdown[sname] = stage_breakdown.get(sname, 0) + 1
+                recent_tickets.append({
+                    'id': t['id'], 'name': t['name'], 'stage': sname,
+                    'create_date': t['create_date'], 'write_date': t['write_date'],
+                    'url': f"{base_url}/web#id={t['id']}&model=helpdesk.ticket&view_type=form",
+                })
+
+        return {
+            'period': period, 'period_label': period_label,
+            'new_tickets': new_count,
+            'resolved_tickets': resolved_count,
+            'open_tickets': open_count,
+            'stage_breakdown': stage_breakdown,
+            'recent_tickets': recent_tickets,
+        }
+
+    except Exception as e:
+        return {'error': f'Error fetching helpdesk status: {str(e)}'}
+
+
+@mcp.tool()
+def get_team_capacity(period: str = "7d") -> Dict[str, Any]:
+    """
+    Team capacity overview: timesheet hours logged in the period plus the full
+    current backlog per assignee with weeks-to-clear estimates.
+
+    Period options: "7d" (default), "1m", "1q".
+
+    Use this when asked about team workload, capacity, who is busy, missing
+    timesheets, customer billing percentage, or how long the backlog will take.
+
+    Returns keys:
+        period, period_label,
+        hours (total_hours, customer_hours, internal_hours,
+               by_employee with total_hours, customer_pct, missing_hours),
+        backlog (total_tasks, total_allocated_hours, by_assignee with
+                 task_count, allocated_hours, weeks_to_clear, months_to_clear).
+    """
+    try:
+        _, _, days, period_label = _parse_period(period)
+
+        hours_data   = get_team_hours(days)
+        backlog_data = get_team_backlog()
+
+        hours_summary = {
+            'total_hours':    hours_data.get('total_hours', 0.0),
+            'customer_hours': hours_data.get('customer_hours', 0.0),
+            'internal_hours': hours_data.get('internal_hours', 0.0),
+            'by_employee': [
+                {'name': e['employee_name'],
+                 'total_hours': e['total_hours'],
+                 'customer_pct': e['customer_pct'],
+                 'missing_hours': e['missing_hours']}
+                for e in (hours_data.get('by_employee') or [])
+            ],
+        }
+
+        backlog_summary = {
+            'total_tasks':           backlog_data.get('total_tasks', 0),
+            'total_allocated_hours': backlog_data.get('total_allocated_hours', 0.0),
+            'by_assignee': [
+                {'assignee': a['assignee'],
+                 'task_count': a['task_count'],
+                 'allocated_hours': a['allocated_hours'],
+                 'weeks_to_clear': a['weeks_to_clear'],
+                 'months_to_clear': a['months_to_clear']}
+                for a in (backlog_data.get('by_assignee') or [])
+            ],
+        }
+
+        return {
+            'period': period, 'period_label': period_label,
+            'hours': hours_summary,
+            'backlog': backlog_summary,
+        }
+
+    except Exception as e:
+        return {'error': f'Error fetching team capacity: {str(e)}'}
+
+
+@mcp.tool()
+def get_sales_activity(period: str = "7d") -> Dict[str, Any]:
+    """
+    Completed account management and sales activities by the Continuous Services
+    team (department 18) on CRM opportunities and customer contacts.
+
+    Period options: "7d" (default), "1m", "1q".
+
+    Use this when asked about CRM pipeline work, customer touchpoints, sales
+    actions, account management activities, or prospect follow-ups.
+
+    Returns keys:
+        period, period_label, crm_count, partner_count,
+        crm_activities (list with date, author, activity_type, lead_name, lead_id, body, url),
+        partner_activities (list with date, author, activity_type, partner_name, partner_id, body, url).
+    """
+    try:
+        _, _, days, period_label = _parse_period(period)
+        data = get_department_activities(days)
+        return {
+            'period': period,
+            'period_label': period_label,
+            **{k: v for k, v in data.items() if k != 'days'},
+        }
+    except Exception as e:
+        return {'error': f'Error fetching sales activity: {str(e)}'}
 
 
 @mcp.custom_route("/", methods=["GET"])
