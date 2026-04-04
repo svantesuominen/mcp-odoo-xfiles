@@ -6,9 +6,10 @@ A high-performance Model Context Protocol (MCP) server that empowers AI assistan
 
 - **Search Similar Tickets**: Intelligent search through historical helpdesk tickets to find proven solutions.
 - **Conversation History**: Deep-dive into ticket logs, internal notes, and email history.
-- **Documentation Link**: Automatic lookup in official Odoo documentation.
+- **Documentation Lookup**: Automatic search in official Odoo documentation via Google.
 - **Source Code Analysis**: Direct integration with Odoo's GitHub repository for technical debugging.
 - **Trend Analysis**: Ability to analyze ticket volumes and topics over custom date ranges.
+- **Weekly Activity Reports**: Accurate counts and lists of new and updated tickets over any time window.
 
 ---
 
@@ -24,13 +25,14 @@ This server is optimized for deployment on [Railway](https://railway.app), lever
 ### 2. Environment Variables
 Configure the following in your Railway project settings:
 
-| Variable | Description |
-| :--- | :--- |
-| `ODOO_URL` | Your Odoo instance URL (e.g., `https://mycompany.odoo.com`) |
-| `ODOO_DB` | Database name |
-| `ODOO_USERNAME` | Your Odoo login email/username |
-| `ODOO_PASSWORD` | Your Odoo password or **API Key** (Recommended) |
-| `PORT` | Set automatically by Railway (used for SSE mode) |
+| Variable | Required | Description |
+| :--- | :---: | :--- |
+| `ODOO_URL` | Yes | Your Odoo instance URL (e.g., `https://mycompany.odoo.com`) |
+| `ODOO_DB` | Yes | Database name |
+| `ODOO_USERNAME` | Yes | Your Odoo login email/username |
+| `ODOO_PASSWORD` | Yes | Your Odoo password or **API Key** (Recommended) |
+| `GITHUB_TOKEN` | No | GitHub personal access token — raises code search rate limit from ~10 to 5000 req/min |
+| `PORT` | Auto | Set automatically by Railway (used for SSE mode) |
 
 ### Connecting to Claude
 Once deployed, Railway will provide a public URL (e.g., `https://mcp-odoo-xfiles-production.up.railway.app`).
@@ -93,7 +95,15 @@ Add the following to your `claude_desktop_config.json`:
    ```
 
 4. Setup environment:
-   Create a `.env` file based on `.env.example`.
+   Create a `.env` file with the variables listed in the table above.
+
+   ```dotenv
+   ODOO_URL=https://mycompany.odoo.com
+   ODOO_DB=mydb
+   ODOO_USERNAME=admin@example.com
+   ODOO_PASSWORD=your_api_key_here
+   GITHUB_TOKEN=ghp_optional_token
+   ```
 
 ### Running
 To run the server in standard I/O mode (default for local):
@@ -108,9 +118,10 @@ npx @modelcontextprotocol/inspector python server.py
 
 ---
 
-## Security Note
+## Security Notes
 - **Never** commit your `.env` file.
 - Use **Odoo API Keys** instead of regular passwords whenever possible for improved security and audit logging.
+- Provide a `GITHUB_TOKEN` to avoid hitting GitHub's unauthenticated code search rate limit (10 req/min).
 - Ensure your Railway app's public URL is kept private or properly secured if sensitive data is exposed.
 
 ## License

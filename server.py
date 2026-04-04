@@ -1,5 +1,4 @@
 import os
-import sys
 import xmlrpc.client
 from typing import List, Dict, Any, Union
 from fastmcp import FastMCP
@@ -7,6 +6,7 @@ from dotenv import load_dotenv
 from googlesearch import search as google_search
 import requests
 from datetime import datetime, timedelta
+import time
 from starlette.responses import JSONResponse
 
 # Load environment variables
@@ -17,23 +17,35 @@ ODOO_URL = os.getenv("ODOO_URL")
 ODOO_DB = os.getenv("ODOO_DB")
 ODOO_USERNAME = os.getenv("ODOO_USERNAME")
 ODOO_PASSWORD = os.getenv("ODOO_PASSWORD") or os.getenv("ODOO_API_KEY")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+
+HELPDESK_TEAM_ID = 2
+BASE_TICKET_DOMAIN = [
+    ('team_id', '=', HELPDESK_TEAM_ID),
+    ('stage_id.name', 'not ilike', 'cancel'),
+]
 
 # Initialize MCP
 mcp = FastMCP("Odoo Helpdesk Agent")
 
+_odoo_cache: Dict[str, Any] = {"uid": None, "models": None}
+
 def get_odoo_connection():
     if not all([ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD]):
         raise ValueError("Missing Odoo credentials in environment variables")
-    
-    # Ensure URL doesn't end with slash for consistency
+
+    if _odoo_cache["uid"] and _odoo_cache["models"]:
+        return _odoo_cache["uid"], _odoo_cache["models"]
+
     url = ODOO_URL.rstrip('/')
-    
     common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
     try:
         uid = common.authenticate(ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD, {})
         if not uid:
-             raise PermissionError("Authentication failed. Please check your credentials.")
+            raise PermissionError("Authentication failed. Please check your credentials.")
         models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
+        _odoo_cache["uid"] = uid
+        _odoo_cache["models"] = models
         return uid, models
     except Exception as e:
         raise ConnectionError(f"Failed to connect to Odoo: {str(e)}")
@@ -42,26 +54,24 @@ def get_odoo_connection():
 def search_similar_tickets(query: str, limit: int = 5) -> List[Dict[str, Any]]:
     """
     Search for existing helpdesk tickets that might be similar to the problem.
-    Searches in ticket name and description.
-    Returns keys: id, name, stage_id, description, create_date, url.
+    Searches in ticket name and description. Scoped to team 2; cancelled tickets are excluded.
+    Returns keys: id, name, stage_id, team_id, description, create_date, url.
     ALWAYS include the 'url' in your response so the user can access the ticket directly.
     """
     try:
         uid, models = get_odoo_connection()
-        
-        # Search domain: Name OR Description matches query
-        domain = ['|', ('name', 'ilike', query), ('description', 'ilike', query)]
-        
+
+        domain = BASE_TICKET_DOMAIN + ['|', ('name', 'ilike', query), ('description', 'ilike', query)]
+
         ticket_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'search',
             [domain],
             {'limit': limit})
-        
+
         if not ticket_ids:
             return []
-            
-    # Updated fields list to include assignee, customer, and priority
-        fields = ['id', 'name', 'stage_id', 'user_id', 'partner_id', 'priority', 'description', 'create_date']
+
+        fields = ['id', 'name', 'stage_id', 'team_id', 'user_id', 'partner_id', 'priority', 'description', 'create_date']
         
         tickets = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'read',
@@ -81,27 +91,28 @@ def search_similar_tickets(query: str, limit: int = 5) -> List[Dict[str, Any]]:
 @mcp.tool()
 def get_recent_tickets(limit: int = 5, stage_id: int = None) -> List[Dict[str, Any]]:
     """
-    Get the most recent helpdesk tickets.
-    Can be filtered by stage_id if provided.
-    Returns keys: id, name, stage_id, user_id (assignee), partner_id (customer), priority, create_date, url.
+    Get the most recent helpdesk tickets, ordered by creation date.
+    Can be filtered by stage_id if provided. Scoped to team 2; cancelled tickets are excluded.
+    Stages "Solved" and "Approval" indicate resolved tickets.
+    Returns keys: id, name, stage_id, team_id, user_id (assignee), partner_id (customer), priority, create_date, url.
     ALWAYS include the 'url' in your response so the user can access the ticket directly.
     """
     try:
         uid, models = get_odoo_connection()
-        
-        domain = []
+
+        domain = list(BASE_TICKET_DOMAIN)
         if stage_id:
             domain.append(('stage_id', '=', stage_id))
-            
+
         ticket_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'search',
             [domain],
             {'limit': limit, 'order': 'create_date desc'})
-            
+
         if not ticket_ids:
             return []
-            
-        fields = ['id', 'name', 'stage_id', 'user_id', 'partner_id', 'priority', 'create_date']
+
+        fields = ['id', 'name', 'stage_id', 'team_id', 'user_id', 'partner_id', 'priority', 'create_date']
         tickets = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'read',
             [ticket_ids],
@@ -115,29 +126,26 @@ def get_recent_tickets(limit: int = 5, stage_id: int = None) -> List[Dict[str, A
     except Exception as e:
         return [{"error": f"Error fetching recent tickets: {str(e)}"}]
 
-    except Exception as e:
-        return [{"error": f"Error fetching recent tickets: {str(e)}"}]
-
 @mcp.tool()
 def get_recently_updated_tickets(limit: int = 10) -> List[Dict[str, Any]]:
     """
     Get tickets that have been modified (or had messages sent) recently.
-    Useful for seeing active discussions or changes.
-    Returns keys: id, name, stage_id, user_id, partner_id, priority, write_date, create_date, url.
+    Useful for seeing active discussions or changes. Scoped to team 2; cancelled tickets are excluded.
+    Returns keys: id, name, stage_id, team_id, user_id, partner_id, priority, write_date, create_date, url.
     ALWAYS include the 'url' in your response so the user can access the ticket directly.
     """
     try:
         uid, models = get_odoo_connection()
-        
+
         ticket_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'search',
-            [[]],
+            [BASE_TICKET_DOMAIN],
             {'limit': limit, 'order': 'write_date desc'})
-            
+
         if not ticket_ids:
             return []
-            
-        fields = ['id', 'name', 'stage_id', 'user_id', 'partner_id', 'priority', 'write_date', 'create_date']
+
+        fields = ['id', 'name', 'stage_id', 'team_id', 'user_id', 'partner_id', 'priority', 'write_date', 'create_date']
         tickets = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'read',
             [ticket_ids],
@@ -156,32 +164,37 @@ def get_weekly_activity(days: int = 7) -> Dict[str, Any]:
     """
     Get a summary of ticket activity for the last N days (default 7).
     Returns tickets created and tickets updated in that period to generate a progress report.
+    Scoped to team 2; cancelled tickets are excluded.
+    Stages "Solved" and "Approval" indicate resolved tickets.
     Returns keys: days_analyzed, new_tickets_count, updated_tickets_count, new_tickets (list with url), active_tickets (list with url).
+    Each ticket includes: id, name, stage_id, team_id, user_id, priority, create_date, write_date, url.
     ALWAYS include the ticket 'url' when listing specific tickets so the user can access them directly.
     """
     try:
         uid, models = get_odoo_connection()
-        
-        # Calculate date threshold
+
         date_threshold = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
-        
+
         # 1. Tickets Created
-        created_domain = [('create_date', '>=', date_threshold)]
+        created_domain = BASE_TICKET_DOMAIN + [('create_date', '>=', date_threshold)]
+        true_created_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search_count', [created_domain])
         created_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'search',
             [created_domain],
-            {'limit': 50, 'order': 'create_date desc'}) # Limit to prevent overflow
-            
-        # 2. Tickets Updated (excluding created ones if you want, but seeing both is fine)
-        # We query for write_date >= threshold
-        updated_domain = [('write_date', '>=', date_threshold)]
+            {'limit': 50, 'order': 'create_date desc'})
+
+        # 2. Tickets Updated
+        updated_domain = BASE_TICKET_DOMAIN + [('write_date', '>=', date_threshold)]
+        true_updated_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search_count', [updated_domain])
         updated_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'search',
             [updated_domain],
             {'limit': 50, 'order': 'write_date desc'})
-            
-        fields = ['id', 'name', 'stage_id', 'user_id', 'priority', 'create_date', 'write_date']
-        
+
+        fields = ['id', 'name', 'stage_id', 'team_id', 'user_id', 'priority', 'create_date', 'write_date']
+
         created_tickets = []
         if created_ids:
             created_tickets = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD, 'helpdesk.ticket', 'read', [created_ids], {'fields': fields})
@@ -189,21 +202,20 @@ def get_weekly_activity(days: int = 7) -> Dict[str, Any]:
         updated_tickets = []
         if updated_ids:
             updated_tickets = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD, 'helpdesk.ticket', 'read', [updated_ids], {'fields': fields})
-            
+
         base_url = ODOO_URL.rstrip('/')
-        
-        # Helper to add URL
+
         def add_url(tlist):
             for t in tlist:
                 t['url'] = f"{base_url}/web#id={t['id']}&model=helpdesk.ticket&view_type=form"
-                
+
         add_url(created_tickets)
         add_url(updated_tickets)
 
         return {
             "days_analyzed": days,
-            "new_tickets_count": len(created_ids),
-            "updated_tickets_count": len(updated_ids),
+            "new_tickets_count": true_created_count,
+            "updated_tickets_count": true_updated_count,
             "new_tickets": created_tickets,
             "active_tickets": updated_tickets
         }
@@ -214,16 +226,16 @@ def get_weekly_activity(days: int = 7) -> Dict[str, Any]:
 @mcp.tool()
 def get_ticket_details(ticket_id: int) -> Dict[str, Any]:
     """
-    Get full details for a specific ticket including description, assignee, stage, customer info, etc.
+    Get full details for a specific ticket including description, assignee, stage, team, customer info, etc.
     Returns complete ticket object including 'url'.
     ALWAYS include the 'url' in your response so the user can access the ticket directly.
     """
     try:
         uid, models = get_odoo_connection()
-        
+
         fields = [
-            'id', 'name', 'description', 'stage_id', 'user_id', 
-            'partner_id', 'partner_email', 'priority', 
+            'id', 'name', 'description', 'stage_id', 'team_id', 'user_id',
+            'partner_id', 'partner_email', 'priority',
             'tag_ids', 'create_date', 'write_date'
         ]
         
@@ -303,31 +315,31 @@ def search_odoo_docs(query: str, limit: int = 3) -> List[str]:
     Search Odoo official documentation (odoo.com/documentation) for potential solutions.
     """
     results = []
+    search_query = f"site:odoo.com/documentation {query}"
     try:
-        # Search specifically in Odoo documentation
-        search_query = f"site:odoo.com/documentation {query}"
-        # googlesearch-python's generic search returns simple URLs if advanced=False
-        # Using advanced=True to get Title/Desc if possible, depending on library version installed.
-        # Fallback to simple strings if advanced not available or behaves differently.
-        
-        # Safe usage: just URLs first, or try/except.
-        # Let's stick to simple strings which is safest with basic deps.
         search_results = google_search(search_query, num_results=limit, advanced=True)
-        
         for result in search_results:
-            results.append(f"Title: {result.title}\nURL: {result.url}\nDescription: {result.description}")
-            
+            try:
+                title = getattr(result, 'title', None) or "No title"
+                url = getattr(result, 'url', None) or str(result)
+                description = getattr(result, 'description', None) or ""
+                results.append(f"Title: {title}\nURL: {url}\nDescription: {description}")
+            except Exception:
+                results.append(f"URL: {str(result)}")
+        # Small delay to reduce likelihood of Google rate-limiting
+        time.sleep(1)
     except TypeError:
-        # Fallback for older library version
+        # Fallback for older library versions that don't support advanced=True
         try:
             search_results = google_search(search_query, num_results=limit)
             for res in search_results:
                 results.append(f"URL: {res}")
+            time.sleep(1)
         except Exception as e:
             results.append(f"Error searching docs: {str(e)}")
     except Exception as e:
         results.append(f"Error searching docs: {str(e)}")
-        
+
     return results
 
 @mcp.tool()
@@ -339,6 +351,8 @@ def search_odoo_github_code(query: str, limit: int = 5) -> List[str]:
         # GitHub Code Search API
         github_url = "https://api.github.com/search/code"
         headers = {'Accept': 'application/vnd.github.v3+json'}
+        if GITHUB_TOKEN:
+            headers['Authorization'] = f"token {GITHUB_TOKEN}"
         params = {
             'q': f"repo:odoo/odoo {query}",
             'per_page': limit
@@ -362,44 +376,41 @@ def get_tickets_for_analysis(start_date: str, end_date: str = None, limit: int =
     """
     Get ticket content (name, description, tags) for a specific time range to analyze topics or trends.
     Use this when the user asks about "main topics", "trends", or what happened during a specific period (e.g. "last week", "last month").
-    
+    Scoped to team 2; cancelled tickets are excluded. Uses create_date as the primary date.
+    Stages "Solved" and "Approval" indicate resolved tickets.
+
     Args:
         start_date: Start date in 'YYYY-MM-DD' format.
         end_date: Optional end date in 'YYYY-MM-DD' format. If not provided, defaults to today.
         limit: Maximum number of tickets to analyze (default 50).
-        
+
     Returns:
-        List of tickets with name, description, tags, and create_date to be used for summarization.
+        List of tickets with name, description, tags, team_id, and create_date to be used for summarization.
         Includes 'url' for reference.
     """
     try:
         uid, models = get_odoo_connection()
-        
-        # Format dates for Odoo domain
-        # We append time to make sure we cover the full days
+
         domain_start = f"{start_date} 00:00:00"
-        
         if end_date:
             domain_end = f"{end_date} 23:59:59"
         else:
             domain_end = datetime.now().strftime('%Y-%m-%d 23:59:59')
-            
-        domain = [
+
+        domain = BASE_TICKET_DOMAIN + [
             ('create_date', '>=', domain_start),
             ('create_date', '<=', domain_end)
         ]
-        
-        # Search
+
         ticket_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'search',
             [domain],
             {'limit': limit, 'order': 'create_date desc'})
-            
+
         if not ticket_ids:
             return []
-            
-        # Read fields relevant for topic analysis
-        fields = ['id', 'name', 'description', 'create_date', 'stage_id', 'priority', 'tag_ids']
+
+        fields = ['id', 'name', 'description', 'create_date', 'stage_id', 'team_id', 'priority', 'tag_ids']
         tickets = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'read',
             [ticket_ids],
@@ -438,6 +449,161 @@ def get_tickets_for_analysis(start_date: str, end_date: str = None, limit: int =
         
     except Exception as e:
         return [{"error": f"Error fetching tickets for analysis: {str(e)}"}]
+
+@mcp.tool()
+def get_issues_analysis(months: int = 3) -> Dict[str, Any]:
+    """
+    Analyze helpdesk tickets for the last N months (default 3) to surface the most important,
+    most common, and most time-consuming/laborious issues, how they were solved, and where
+    R&D prevention investment would have the most impact.
+
+    Scoped to team 2; cancelled tickets are excluded.
+
+    Interpretation guide for the AI:
+    - Use 'message_count' as a proxy for effort: higher = more back-and-forth = more laborious.
+    - Use 'resolution_days' for time-to-resolve: higher = more time-consuming. Null = not yet resolved.
+    - Use 'priority' to weight importance: 0=normal, 1=low, 2=high, 3=very high.
+    - Use 'tag_names' and 'name'/'description' to cluster recurring topics.
+    - Stages "Solved" and "Approval" are resolved states.
+    - Cross-reference tag clusters, priority, and descriptions to suggest R&D prevention investments.
+
+    Returns keys:
+        period_months, start_date, total_tickets,
+        tickets (list with id, name, description, priority, stage_id, team_id, tag_names,
+                 create_date, write_date, resolution_days, message_count, url),
+        summary (by_priority, by_stage, avg_resolution_days, most_used_tags).
+    """
+    try:
+        uid, models = get_odoo_connection()
+
+        start_date = (datetime.now() - timedelta(days=30 * months)).strftime('%Y-%m-%d 00:00:00')
+        domain = BASE_TICKET_DOMAIN + [('create_date', '>=', start_date)]
+
+        # Step 1: Fetch tickets
+        ticket_ids = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search',
+            [domain],
+            {'limit': 200, 'order': 'create_date desc'})
+
+        if not ticket_ids:
+            return {
+                "period_months": months,
+                "start_date": start_date,
+                "total_tickets": 0,
+                "tickets": [],
+                "summary": {
+                    "by_priority": {},
+                    "by_stage": {},
+                    "avg_resolution_days": None,
+                    "most_used_tags": []
+                }
+            }
+
+        fields = ['id', 'name', 'description', 'priority', 'stage_id', 'team_id',
+                  'tag_ids', 'create_date', 'write_date']
+        tickets = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'read',
+            [ticket_ids],
+            {'fields': fields})
+
+        # Step 2: Bulk message count (single query, no N+1)
+        all_ticket_ids = [t['id'] for t in tickets]
+        msg_domain = [
+            ('res_id', 'in', all_ticket_ids),
+            ('model', '=', 'helpdesk.ticket')
+        ]
+        messages = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'mail.message', 'search_read',
+            [msg_domain],
+            {'fields': ['res_id'], 'limit': 5000})
+        msg_count: Dict[int, int] = {}
+        for m in messages:
+            rid = m['res_id']
+            msg_count[rid] = msg_count.get(rid, 0) + 1
+
+        # Step 3: Tag enrichment
+        all_tag_ids: set = set()
+        for t in tickets:
+            if t.get('tag_ids'):
+                all_tag_ids.update(t['tag_ids'])
+
+        tag_map: Dict[int, str] = {}
+        if all_tag_ids:
+            try:
+                tags_data = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                    'helpdesk.tag', 'read',
+                    [list(all_tag_ids)],
+                    {'fields': ['id', 'name']})
+                tag_map = {tag['id']: tag['name'] for tag in tags_data}
+            except Exception:
+                pass
+
+        # Step 4: Enrich tickets and build summary
+        base_url = ODOO_URL.rstrip('/')
+        by_priority: Dict[str, int] = {}
+        by_stage: Dict[str, int] = {}
+        tag_usage: Dict[str, int] = {}
+        resolution_days_list: List[float] = []
+
+        for ticket in tickets:
+            ticket['url'] = f"{base_url}/web#id={ticket['id']}&model=helpdesk.ticket&view_type=form"
+            ticket['message_count'] = msg_count.get(ticket['id'], 0)
+
+            if not ticket.get('description'):
+                ticket['description'] = ""
+
+            tag_names = [tag_map[tid] for tid in ticket.get('tag_ids', []) if tid in tag_map]
+            ticket['tag_names'] = tag_names
+            for tn in tag_names:
+                tag_usage[tn] = tag_usage.get(tn, 0) + 1
+
+            # Resolution time — only for solved/approval stages
+            stage_name = (ticket['stage_id'][1] if ticket.get('stage_id') else '').lower()
+            if 'solved' in stage_name or 'approv' in stage_name:
+                try:
+                    created = datetime.strptime(ticket['create_date'], '%Y-%m-%d %H:%M:%S')
+                    updated = datetime.strptime(ticket['write_date'], '%Y-%m-%d %H:%M:%S')
+                    days = round((updated - created).total_seconds() / 86400, 1)
+                    ticket['resolution_days'] = days
+                    resolution_days_list.append(days)
+                except Exception:
+                    ticket['resolution_days'] = None
+            else:
+                ticket['resolution_days'] = None
+
+            # Summary counters
+            prio_key = str(ticket.get('priority', '0'))
+            by_priority[prio_key] = by_priority.get(prio_key, 0) + 1
+
+            stage_label = ticket['stage_id'][1] if ticket.get('stage_id') else 'Unknown'
+            by_stage[stage_label] = by_stage.get(stage_label, 0) + 1
+
+        avg_resolution = (
+            round(sum(resolution_days_list) / len(resolution_days_list), 1)
+            if resolution_days_list else None
+        )
+        most_used_tags = sorted(
+            [{"name": k, "count": v} for k, v in tag_usage.items()],
+            key=lambda x: x['count'],
+            reverse=True
+        )[:10]
+
+        return {
+            "period_months": months,
+            "start_date": start_date,
+            "total_tickets": len(tickets),
+            "tickets": tickets,
+            "summary": {
+                "by_priority": by_priority,
+                "by_stage": by_stage,
+                "avg_resolution_days": avg_resolution,
+                "most_used_tags": most_used_tags
+            }
+        }
+
+    except Exception as e:
+        return {"error": f"Error fetching issues analysis: {str(e)}"}
+
 
 @mcp.custom_route("/", methods=["GET"])
 async def index(request):
