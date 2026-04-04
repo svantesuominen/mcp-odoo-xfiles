@@ -929,16 +929,25 @@ def get_team_backlog() -> Dict[str, Any]:
 @mcp.tool()
 def get_department_activities(days: int = 7) -> Dict[str, Any]:
     """
-    Fetch completed (done) activities logged by the Continuous Services team
-    (department 18) on CRM opportunities (crm.lead) and contacts (res.partner)
-    for the last N days (default 7).
+    Fetch completed (done) account management and sales activities logged by the
+    Continuous Services team (department 18) on CRM opportunities (crm.lead)
+    and contacts (res.partner) for the last N days (default 7).
 
-    In Odoo, a completed activity creates a mail.message with mail_activity_type_id
-    set. This tool surfaces those messages so you can report on customer touchpoints,
-    follow-ups, and sales/account management actions.
+    These are sales and account management touchpoints: calls, emails, meetings,
+    demos, follow-ups, and other customer-facing actions logged by the team.
+    In Odoo, a completed activity creates a mail.message with mail_activity_type_id set.
 
-    Use this when asked about what the team did with customers, CRM pipeline activity,
-    partner contact activity, or sales actions this week.
+    Use this when asked about:
+    - What account management or sales actions the team completed this week
+    - How many customer/prospect touchpoints were made
+    - CRM pipeline progress and opportunity follow-ups
+    - Which customers or prospects the team contacted
+
+    Interpretation guide:
+    - crm_activities = actions on open opportunities (sales pipeline work)
+    - partner_activities = actions directly on customer/contact records (account management)
+    - activity_type = e.g. "Email", "Call", "Meeting", "To-Do" — indicates the type of touchpoint
+    - body = notes the team member left when completing the activity
 
     Returns keys:
         days, start_date,
@@ -1067,7 +1076,7 @@ def get_weekly_update(days: int = 7) -> Dict[str, Any]:
       1. helpdesk  – new and updated tickets in the period (get_weekly_activity)
       2. timesheets – team hours logged, customer vs internal split (get_team_hours)
       3. rd_hours   – R&D timesheet hours and open R&D tasks (get_rd_hours, last month)
-      4. activities – completed CRM opportunity and partner activities (get_department_activities)
+      4. activities – completed account management & sales activities on CRM and contacts (get_department_activities)
 
     Use this as the primary entry point when asked for a weekly update, weekly summary,
     or weekly report for the team.
