@@ -691,9 +691,9 @@ def get_team_hours(days: int = 7) -> Dict[str, Any]:
     Use this when asked about team workload, customer vs internal hours,
     billable hours, individual utilisation, or missing timesheets.
 
-    customer_hours = billable lines (Billed on Timesheets, Billed at Fixed Price,
-                                     Billed Manually). internal_hours = Non Billable.
-    This matches Odoo's own billing type classification on each timesheet line.
+    customer_hours = lines where a Sales Order Item (so_line) is set.
+    internal_hours = lines without a linked Sales Order Item.
+    This matches the "Sales Order Item is set" filter in Odoo's timesheet report.
 
     Returns keys:
         days, start_date, total_hours, customer_hours, internal_hours,
@@ -716,7 +716,7 @@ def get_team_hours(days: int = 7) -> Dict[str, Any]:
             'account.analytic.line', 'search_read',
             [ts_domain],
             {'fields': ['unit_amount', 'project_id', 'employee_id',
-                        'timesheet_invoice_type'], 'limit': 5000})
+                        'so_line'], 'limit': 5000})
 
         # Step 2: Collect all dept 18 employees (even those with no entries)
         employees = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
@@ -730,9 +730,8 @@ def get_team_hours(days: int = 7) -> Dict[str, Any]:
         }
 
         # Step 3b (continued): Aggregate by employee
-        # customer_hours = billable lines (billable_time, billable_fixed, billable_manual)
-        # internal_hours = non_billable lines
-        BILLABLE_TYPES = {'billable_time', 'billable_fixed', 'billable_manual', 'billable_milestones'}
+        # customer_hours = lines where so_line (Sales Order Item) is set
+        # internal_hours = lines without a linked Sales Order Item
         for line in ts_lines:
             if not line.get('employee_id'):
                 continue
@@ -742,7 +741,7 @@ def get_team_hours(days: int = 7) -> Dict[str, Any]:
                 emp_data[eid] = {'employee_name': ename, 'total_hours': 0.0,
                                  'customer_hours': 0.0, 'internal_hours': 0.0}
             emp_data[eid]['total_hours'] = round(emp_data[eid]['total_hours'] + hours, 2)
-            if line.get('timesheet_invoice_type') in BILLABLE_TYPES:
+            if line.get('so_line'):
                 emp_data[eid]['customer_hours'] = round(emp_data[eid]['customer_hours'] + hours, 2)
             else:
                 emp_data[eid]['internal_hours'] = round(emp_data[eid]['internal_hours'] + hours, 2)
