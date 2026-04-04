@@ -1107,10 +1107,11 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
     - Customer Service: highlight new_tickets, resolved_tickets; show open per stage
       (open_new / open_message / open_in_progress); name top issues with customer name.
       Render each ticket name as a markdown link using its url field.
-    - Tech Maintenance: mention connectivity_tickets count and infra_tasks (open tasks
-      in infrastructure projects, infra_total_hours of work); highlight total_hours,
-      customer_pct; flag missing_hours > 2.
-      Render each ticket/task name as a markdown link using its url field.
+    - Tech Maintenance: report total_hours logged on maintenance projects (no target
+      or missing-hours). Mention connectivity_count and last_connectivity_ticket date
+      (when was the last connectivity problem). Mention infra_task_count and
+      infra_total_hours of estimated work remaining.
+      Render infra task names and last connectivity ticket as markdown links.
     - Key Account Management: report activities for THE WHOLE TEAM (not "you" / not "sinulla").
       Say "The team had X touchpoints" or "Tiimillä oli...".
       Highlight crm_count + partner_count; name top leads/accounts.
@@ -1118,8 +1119,10 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
     - R&D & AI: highlight logged_hours, project names, and worked_tasks (tasks
       that had hours logged in the period). Render each task name as a markdown
       link using its url field. Include logged_hours per task.
-    - Development Work: report total_hours, customer_hours (customer_pct%), and
-      backlog_by_stage counts (backlog / in_progress / acceptance / ready_for_production / total).
+    - Development Work: report total_hours, customer_hours (customer_pct%),
+      backlog_by_stage counts (backlog / in_progress / acceptance / ready_for_production / total),
+      backlog_remaining_hours (total work remaining), and by_person list
+      (name, remaining_hours, days_of_work at 6 h/day). List each person's days briefly.
     If a section has zero data, say so briefly (1 sentence).
     ALWAYS render names as markdown links [name](url) when a url field is present.
     """
@@ -1208,28 +1211,33 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
         maint_internal = round(maint_total - maint_customer, 2)
         maint_customer_pct = (round(maint_customer / maint_total * 100, 1)
                               if maint_total else 0.0)
-        expected_h = days * 8
         emp_summary = sorted([
             {'name': e['name'],
              'total_hours': e['total_hours'],
              'customer_hours': e['customer_hours'],
              'customer_pct': (round(e['customer_hours'] / e['total_hours'] * 100, 1)
-                              if e['total_hours'] else 0.0),
-             'missing_hours': round(max(0.0, expected_h - e['total_hours']), 2)}
+                              if e['total_hours'] else 0.0)}
             for e in maint_emp_data.values()
         ], key=lambda x: x['total_hours'], reverse=True)
 
-        # Open helpdesk tickets tagged "Connection problems"
-        conn_raw = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+        # Connectivity tickets — total count + most recent occurrence
+        connectivity_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'helpdesk.ticket', 'search_count',
+            [[('team_id', '=', HELPDESK_TEAM_ID),
+              ('tag_ids.name', 'ilike', 'connection problems')]])
+        last_conn_raw = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'search_read',
-            [BASE_TICKET_DOMAIN + [('tag_ids.name', 'ilike', 'connection problems')]],
-            {'fields': ['id', 'name', 'stage_id'], 'limit': 20})
-        connectivity_tickets = [
-            {'name': t['name'],
-             'stage': t['stage_id'][1] if t.get('stage_id') else '',
-             'url': f"{base_url}/web#id={t['id']}&model=helpdesk.ticket&view_type=form"}
-            for t in conn_raw
-        ]
+            [[('team_id', '=', HELPDESK_TEAM_ID),
+              ('tag_ids.name', 'ilike', 'connection problems')]],
+            {'fields': ['id', 'name', 'write_date', 'stage_id'],
+             'order': 'write_date desc', 'limit': 1})
+        last_conn = last_conn_raw[0] if last_conn_raw else None
+        last_connectivity_ticket = {
+            'name': last_conn['name'],
+            'date': last_conn['write_date'][:10],
+            'stage': last_conn['stage_id'][1] if last_conn.get('stage_id') else '',
+            'url': f"{base_url}/web#id={last_conn['id']}&model=helpdesk.ticket&view_type=form"
+        } if last_conn else None
 
         # Open tasks in infrastructure projects (with allocated hours)
         infra_raw = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
@@ -1258,8 +1266,8 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
             'internal_hours': maint_internal,
             'customer_pct': maint_customer_pct,
             'by_employee': emp_summary,
-            'connectivity_tickets': connectivity_tickets,
-            'connectivity_count': len(connectivity_tickets),
+            'connectivity_count': connectivity_count,
+            'last_connectivity_ticket': last_connectivity_ticket,
             'infra_tasks': infra_tasks,
             'infra_task_count': len(infra_tasks),
             'infra_total_hours': infra_total_hours,
@@ -1341,28 +1349,77 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
         customer_dev_pct = (round(customer_dev_hours / total_dev_hours * 100, 1)
                             if total_dev_hours else 0.0)
 
-        # Task backlog counts: tasks assigned to dept 18 users or user 67
+        # Task backlog: tasks assigned to dept 18 users or user 67
         dev_employees = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
             [[('department_id', '=', 18)]],
-            {'fields': ['user_id'], 'limit': 200})
+            {'fields': ['name', 'user_id'], 'limit': 200})
         dev_user_ids = [e['user_id'][0] for e in dev_employees if e.get('user_id')]
         if 67 not in dev_user_ids:
             dev_user_ids.append(67)
 
-        dev_stage_map = [
-            ('backlog', 'backlog'),
-            ('in_progress', 'in progress'),
-            ('acceptance', 'acceptance'),
-            ('ready_for_production', 'ready for production'),
-        ]
-        backlog_by_stage: Dict[str, int] = {}
-        for key, stage_name in dev_stage_map:
-            backlog_by_stage[key] = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
-                'project.task', 'search_count',
-                [[('user_ids', 'in', dev_user_ids),
-                  ('stage_id.name', 'ilike', stage_name)]])
+        # Build user_id → name map; resolve user 67's name from res.users
+        uid_to_name: Dict[int, str] = {
+            e['user_id'][0]: e['name']
+            for e in dev_employees if e.get('user_id')
+        }
+        if 67 not in uid_to_name:
+            u67 = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                'res.users', 'read', [[67]], {'fields': ['name']})
+            if u67:
+                uid_to_name[67] = u67[0]['name']
+
+        # Single query for all backlog tasks across the 4 stages
+        backlog_tasks_raw = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('user_ids', 'in', dev_user_ids),
+              '|', '|', '|',
+              ('stage_id.name', 'ilike', 'backlog'),
+              ('stage_id.name', 'ilike', 'in progress'),
+              ('stage_id.name', 'ilike', 'acceptance'),
+              ('stage_id.name', 'ilike', 'ready for production')]],
+            {'fields': ['stage_id', 'user_ids', 'remaining_hours', 'allocated_hours'],
+             'limit': 2000})
+
+        # Stage counts from results
+        backlog_by_stage: Dict[str, int] = {
+            'backlog': 0, 'in_progress': 0, 'acceptance': 0, 'ready_for_production': 0}
+        for t in backlog_tasks_raw:
+            sname = (t['stage_id'][1] if t.get('stage_id') else '').lower()
+            if 'backlog' in sname:
+                backlog_by_stage['backlog'] += 1
+            elif 'progress' in sname:
+                backlog_by_stage['in_progress'] += 1
+            elif 'acceptance' in sname:
+                backlog_by_stage['acceptance'] += 1
+            elif 'production' in sname:
+                backlog_by_stage['ready_for_production'] += 1
         backlog_by_stage['total'] = sum(backlog_by_stage.values())
+
+        def _task_remaining(t: Dict) -> float:
+            r = t.get('remaining_hours') or 0.0
+            return r if r > 0 else (t.get('allocated_hours') or 0.0)
+
+        backlog_remaining_hours = round(
+            sum(_task_remaining(t) for t in backlog_tasks_raw), 1)
+
+        # Per-person: split remaining hours equally across assignees
+        person_hours: Dict[int, float] = {}
+        for t in backlog_tasks_raw:
+            uids = t.get('user_ids') or []
+            if not uids:
+                continue
+            share = _task_remaining(t) / len(uids)
+            for u in uids:
+                if u in dev_user_ids:
+                    person_hours[u] = round(person_hours.get(u, 0.0) + share, 1)
+
+        by_person = sorted([
+            {'name': uid_to_name.get(u, f'User {u}'),
+             'remaining_hours': h,
+             'days_of_work': round(h / 6, 1)}
+            for u, h in person_hours.items()
+        ], key=lambda x: -x['remaining_hours'])
 
         development_work = {
             'total_hours': total_dev_hours,
@@ -1370,6 +1427,8 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
             'internal_hours': internal_dev_hours,
             'customer_pct': customer_dev_pct,
             'backlog_by_stage': backlog_by_stage,
+            'backlog_remaining_hours': backlog_remaining_hours,
+            'by_person': by_person,
         }
 
         return {
