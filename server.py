@@ -1757,6 +1757,16 @@ async def index(request):
 if __name__ == "__main__":
     port_env = os.getenv("PORT")
     if port_env:
+        # Start Slack bot in a background thread if tokens are configured
+        if os.getenv("SLACK_BOT_TOKEN") and os.getenv("SLACK_APP_TOKEN"):
+            import threading, asyncio as _asyncio
+            def _run_slack():
+                from slack_bot import main as slack_main
+                _asyncio.run(slack_main())
+            t = threading.Thread(target=_run_slack, daemon=True, name="slack-bot")
+            t.start()
+            _logger.info("Slack bot thread started")
+
         # Production/Cloud mode: Run as SSE server
         port = int(port_env)
         # Using the built-in .run(transport="sse") is more robust as it handles
