@@ -1105,7 +1105,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url,
     )
     s1 = (
         f"*1. Customer Service*\n"
-        f"*{cs['new_tickets']} new tickets,* {cs['resolved_tickets']} resolved. "
+        f"*{cs['new_tickets']} new tickets,* {cs['resolved_tickets']} resolved.\n"
         f"Now open: {cs['open_new']} new / {cs['open_message']} awaiting msg / "
         f"{cs['open_in_progress']} in progress (*{cs['open_tickets']} total*).\n"
         f"Recent: {top}."
@@ -1134,8 +1134,9 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url,
     )
     s2 = (
         f"*2. Tech Maintenance*\n"
-        f"*Logged {tm['total_hours']} h* ({emp_str}).\n"
-        f"{conn_str} Infra tasks open: {tm['infra_task_count']} ({round(tm['infra_total_hours'])} h)."
+        f"{conn_str}\n"
+        f"Infra tasks open: {tm['infra_task_count']} ({round(tm['infra_total_hours'])} h).\n"
+        f"*Logged {tm['total_hours']} h* ({emp_str})."
         + (f"\nTop timesheet tasks: {top_ts_links}." if top_ts_links else "")
         + (f"\nBiggest tasks open: {infra_links}." if infra_links else "")
     )
