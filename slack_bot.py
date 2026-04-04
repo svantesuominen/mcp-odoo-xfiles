@@ -29,7 +29,14 @@ app = AsyncApp(token=os.environ["SLACK_BOT_TOKEN"])
 from server import get_team_status
 
 
-async def _post_status(ack, say, period: str):
+ALLOWED_CHANNEL = os.environ.get("SLACK_ALLOWED_CHANNEL", "team-x-files")
+
+
+async def _post_status(ack, say, body, period: str):
+    channel = body.get("channel_name", "")
+    if channel != ALLOWED_CHANNEL:
+        await ack(text=f"This command only works in #{ALLOWED_CHANNEL}.")
+        return
     await ack()
     try:
         text = get_team_status(period=period, format="slack")
@@ -40,18 +47,18 @@ async def _post_status(ack, say, period: str):
 
 
 @app.command("/weekly")
-async def cmd_weekly(ack, say):
-    await _post_status(ack, say, "7d")
+async def cmd_weekly(ack, say, body):
+    await _post_status(ack, say, body, "7d")
 
 
 @app.command("/monthly")
-async def cmd_monthly(ack, say):
-    await _post_status(ack, say, "1m")
+async def cmd_monthly(ack, say, body):
+    await _post_status(ack, say, body, "1m")
 
 
 @app.command("/quarterly")
-async def cmd_quarterly(ack, say):
-    await _post_status(ack, say, "1q")
+async def cmd_quarterly(ack, say, body):
+    await _post_status(ack, say, body, "1q")
 
 
 async def main():
