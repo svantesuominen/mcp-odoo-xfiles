@@ -1099,7 +1099,8 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
     2. Tech Maintenance: [3 sentences, max 300 chars total, focus on numbers and lists]
     3. Key Account Management: [3 sentences, max 300 chars total, focus on numbers and lists]
     4. R&D & AI: [3 sentences, max 300 chars total, focus on numbers and lists]
-    5. Development Work: [3 sentences, max 300 chars total, focus on hours and backlog stage counts]
+    5a. Development Work — Done: [2 sentences, max 300 chars, total+customer hours, per-person income]
+    5b. Development Work — To Be Done: [2 sentences, max 300 chars, backlog remaining hours, per-person days]
 
     period_label mapping: "7d" → "weekly", "1m" → "monthly", "1q" → "quarterly"
 
@@ -1107,8 +1108,9 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
     - Customer Service: highlight new_tickets, resolved_tickets; show open per stage
       (open_new / open_message / open_in_progress); name top issues with customer name.
       Render each ticket name as a markdown link using its url field.
-    - Tech Maintenance: report total_hours logged on maintenance projects (no target
-      or missing-hours). Mention connectivity_count and last_connectivity_ticket date
+    - Tech Maintenance: report ONLY total_hours logged on maintenance projects —
+      do NOT mention customer_hours or customer_pct (those belong in Section 5).
+      Mention connectivity_count and last_connectivity_ticket date
       (when was the last connectivity problem). Mention infra_task_count and
       infra_total_hours of estimated work remaining.
       Render infra task names and last connectivity ticket as markdown links.
@@ -1119,10 +1121,16 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
     - R&D & AI: highlight logged_hours, project names, and worked_tasks (tasks
       that had hours logged in the period). Render each task name as a markdown
       link using its url field. Include logged_hours per task.
-    - Development Work: report total_hours, customer_hours (customer_pct%),
-      backlog_by_stage counts (backlog / in_progress / acceptance / ready_for_production / total),
-      backlog_remaining_hours (total work remaining), and by_person list
-      (name, remaining_hours, days_of_work at 6 h/day). List each person's days briefly.
+    - Development Work — DONE (this period):
+        Sentence 1: "Last [period_label]: total_hours h total, customer_hours h customer
+        (customer_pct%), estimated income total_estimated_income €."
+        Sentence 2: List by_person_done briefly — name: total_hours h, customer_hours h cust,
+        estimated_income €. Include every person in by_person_done.
+    - Development Work — TO BE DONE (backlog):
+        Sentence 1: backlog_remaining_hours h remaining across backlog_by_stage total tasks
+        (breakdown by stage: backlog / in_progress / acceptance / ready_for_production).
+        Sentence 2: Per person from by_person list — name: days_of_work days (6 h/day).
+        Include every person in by_person.
     If a section has zero data, say so briefly (1 sentence).
     ALWAYS render names as markdown links [name](url) when a url field is present.
     """
@@ -1334,20 +1342,48 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
         }
 
         # ── Section 5: Development Work and Backlog ──────────────────────
-        # Timesheets: all dept 18 employees for the period (cap at today to exclude
-        # future leave entries that Odoo pre-populates in account.analytic.line)
+        # Timesheets: dept 18 + Jyri (user 67), capped at today to exclude
+        # future leave entries that Odoo pre-populates in account.analytic.line
         dev_ts = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'account.analytic.line', 'search_read',
-            [[('employee_id.department_id', '=', 18),
+            [['|',
+              ('employee_id.department_id', '=', 18),
+              ('employee_id.user_id', '=', 67),
               ('date', '>=', start_d), ('date', '<=', today_str),
               ('project_id', '!=', False)]],
-            {'fields': ['unit_amount', 'so_line'], 'limit': 5000})
+            {'fields': ['unit_amount', 'so_line', 'employee_id'], 'limit': 5000})
         total_dev_hours = round(sum(l['unit_amount'] for l in dev_ts), 2)
         customer_dev_hours = round(
             sum(l['unit_amount'] for l in dev_ts if l.get('so_line')), 2)
         internal_dev_hours = round(total_dev_hours - customer_dev_hours, 2)
         customer_dev_pct = (round(customer_dev_hours / total_dev_hours * 100, 1)
                             if total_dev_hours else 0.0)
+
+        # Per-person "work done" with estimated income at 125 €/h
+        INCOME_RATE = 125.0
+        done_emp: Dict[int, Dict] = {}
+        for line in dev_ts:
+            if not line.get('employee_id'):
+                continue
+            eid, ename = line['employee_id']
+            h = line['unit_amount']
+            if eid not in done_emp:
+                done_emp[eid] = {'name': ename, 'total_hours': 0.0,
+                                 'customer_hours': 0.0}
+            done_emp[eid]['total_hours'] = round(
+                done_emp[eid]['total_hours'] + h, 2)
+            if line.get('so_line'):
+                done_emp[eid]['customer_hours'] = round(
+                    done_emp[eid]['customer_hours'] + h, 2)
+
+        by_person_done = sorted([
+            {'name': e['name'],
+             'total_hours': e['total_hours'],
+             'customer_hours': e['customer_hours'],
+             'estimated_income': round(e['customer_hours'] * INCOME_RATE, 0)}
+            for e in done_emp.values()
+        ], key=lambda x: -x['total_hours'])
+        total_estimated_income = round(customer_dev_hours * INCOME_RATE, 0)
 
         # Task backlog: tasks assigned to dept 18 users or user 67
         dev_employees = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
@@ -1426,6 +1462,8 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
             'customer_hours': customer_dev_hours,
             'internal_hours': internal_dev_hours,
             'customer_pct': customer_dev_pct,
+            'total_estimated_income': total_estimated_income,
+            'by_person_done': by_person_done,
             'backlog_by_stage': backlog_by_stage,
             'backlog_remaining_hours': backlog_remaining_hours,
             'by_person': by_person,
