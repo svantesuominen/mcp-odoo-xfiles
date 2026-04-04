@@ -1085,10 +1085,13 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url,
         """Slack link helper."""
         return f"<{url}|{text}>" if url else text
 
+    FI_DAYS = ['Ma', 'Ti', 'Ke', 'To', 'Pe', 'La', 'Su']
+
     def _fmt_date(d: str) -> str:
-        """Format YYYY-MM-DD as 'Apr 4'."""
+        """Format YYYY-MM-DD as Finnish 'La 28.3.'"""
         try:
-            return datetime.strptime(d, '%Y-%m-%d').strftime('%b %-d')
+            dt = datetime.strptime(d, '%Y-%m-%d')
+            return f"{FI_DAYS[dt.weekday()]} {dt.day}.{dt.month}."
         except Exception:
             return d
 
@@ -1588,10 +1591,11 @@ def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
         }
 
         if format == "slack":
+            yesterday_str = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
             return _format_team_status(
                 customer_service, tech_maintenance, key_account_management,
                 rd_and_ai, development_work, period_label, base_url,
-                start_d=start_d, end_d=today_str)
+                start_d=start_d, end_d=yesterday_str)
 
         return {
             'period': period,
