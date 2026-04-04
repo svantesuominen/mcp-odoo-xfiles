@@ -30,8 +30,9 @@ ALLOWED_CHANNEL = os.environ.get("SLACK_ALLOWED_CHANNEL", "team-x-files")
 
 async def _post_status(ack, say, body, period: str):
     channel = body.get("channel_name", "")
-    if channel != ALLOWED_CHANNEL:
-        await ack(text=f"This command only works in #{ALLOWED_CHANNEL}.")
+    _logger.info("Slash command received in channel: %r (allowed: %r)", channel, ALLOWED_CHANNEL)
+    if ALLOWED_CHANNEL and channel != ALLOWED_CHANNEL:
+        await ack(text=f"This command only works in #{ALLOWED_CHANNEL}. (you are in: #{channel})")
         return
     await ack()
     try:
