@@ -1122,7 +1122,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
         f"*2. Tech Maintenance*\n"
         f"Logged {tm['total_hours']} h ({emp_str}).\n"
         f"{conn_str}. "
-        f"Infra tasks open: {tm['infra_task_count']} ({tm['infra_total_hours']} h / {infra_days} days). "
+        f"Infra tasks open: {tm['infra_task_count']} ({round(tm['infra_total_hours'])} h). "
         + (f"Biggest: {infra_links}." if infra_links else "")
     )
 
