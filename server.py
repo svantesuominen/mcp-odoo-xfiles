@@ -637,7 +637,7 @@ def get_rd_hours(months: int = 3) -> Dict[str, Any]:
     Returns keys:
         period_months, start_date, total_logged_hours,
         projects (list with project_id, project_name, logged_hours,
-                  timesheet_tasks (task + hours), open_tasks (task + stage + planned_hours + url)).
+                  timesheet_tasks (task + hours), open_tasks (task + stage + allocated_hours + url)).
     """
     try:
         uid, models = get_odoo_connection()
@@ -676,13 +676,17 @@ def get_rd_hours(months: int = 3) -> Dict[str, Any]:
                 proj_ts[pid]['tasks'][tid]['hours'] = round(proj_ts[pid]['tasks'][tid]['hours'] + line['unit_amount'], 2)
 
         # Step 3: Open tasks on R&D projects assigned to dept 18
-        task_domain = [('project_id.name', 'ilike', 'r&d')]
+        task_domain = [
+            ('project_id.name', 'ilike', 'r&d'),
+            ('stage_id.name', 'not ilike', 'done'),
+            ('stage_id.name', 'not ilike', 'cancel'),
+        ]
         if dept18_user_ids:
             task_domain.append(('user_ids', 'in', dept18_user_ids))
         open_tasks = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [task_domain],
-            {'fields': ['id', 'name', 'project_id', 'stage_id', 'planned_hours'], 'limit': 500})
+            {'fields': ['id', 'name', 'project_id', 'stage_id', 'allocated_hours'], 'limit': 500})
 
         # Group open tasks by project
         proj_tasks: Dict[int, list] = {}
@@ -697,7 +701,7 @@ def get_rd_hours(months: int = 3) -> Dict[str, Any]:
                 'task_id': task['id'],
                 'task_name': task['name'],
                 'stage': stage_name,
-                'planned_hours': task.get('planned_hours') or 0.0,
+                'allocated_hours': task.get('allocated_hours') or 0.0,
                 'url': f"{base_url}/web#id={task['id']}&model=project.task&view_type=form"
             })
 
@@ -830,9 +834,9 @@ def get_team_backlog() -> Dict[str, Any]:
     capacity, or task distribution across pipeline stages.
 
     Returns keys:
-        total_tasks, total_planned_hours,
-        stages (list with stage_id, stage_name, task_count, planned_hours,
-                tasks (list with id, name, project_name, planned_hours, url)).
+        total_tasks, total_allocated_hours,
+        stages (list with stage_id, stage_name, task_count, allocated_hours,
+                tasks (list with id, name, project_name, allocated_hours, url)).
     """
     try:
         uid, models = get_odoo_connection()
@@ -851,46 +855,47 @@ def get_team_backlog() -> Dict[str, Any]:
         # Step 2: Fetch tasks assigned to those users
         tasks = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'project.task', 'search_read',
-            [[('user_ids', 'in', user_ids)]],
-            {'fields': ['id', 'name', 'stage_id', 'planned_hours', 'project_id'], 'limit': 1000})
+            [[('user_ids', 'in', user_ids),
+              ('stage_id.name', 'not ilike', 'done'),
+              ('stage_id.name', 'not ilike', 'cancel')]],
+            {'fields': ['id', 'name', 'stage_id', 'allocated_hours', 'project_id'], 'limit': 1000})
 
-        # Step 3: Group by stage
-        stage_data: Dict[int, Dict] = {}
+        # Step 3: Group by stage name (merge across projects — same name = same logical stage)
+        stage_data: Dict[str, Dict] = {}
         for task in tasks:
             if not task.get('stage_id'):
                 continue
-            sid, sname = task['stage_id']
-            if sid not in stage_data:
-                stage_data[sid] = {'stage_name': sname, 'tasks': []}
+            sname = task['stage_id'][1]
+            if sname not in stage_data:
+                stage_data[sname] = {'tasks': []}
             proj_name = task['project_id'][1] if task.get('project_id') else ''
-            stage_data[sid]['tasks'].append({
+            stage_data[sname]['tasks'].append({
                 'id': task['id'],
                 'name': task['name'],
                 'project_name': proj_name,
-                'planned_hours': task.get('planned_hours') or 0.0,
+                'allocated_hours': task.get('allocated_hours') or 0.0,
                 'url': f"{base_url}/web#id={task['id']}&model=project.task&view_type=form"
             })
 
         stages = []
-        for sid, data in stage_data.items():
-            planned = round(sum(t['planned_hours'] for t in data['tasks']), 2)
+        for sname, data in stage_data.items():
+            allocated = round(sum(t['allocated_hours'] for t in data['tasks']), 2)
             stages.append({
-                'stage_id': sid,
-                'stage_name': data['stage_name'],
+                'stage_name': sname,
                 'task_count': len(data['tasks']),
-                'planned_hours': planned,
-                'tasks': sorted(data['tasks'], key=lambda t: t['planned_hours'], reverse=True)
+                'allocated_hours': allocated,
+                'tasks': sorted(data['tasks'], key=lambda t: t['allocated_hours'], reverse=True)
             })
 
         # Sort stages by task count descending
         stages.sort(key=lambda s: s['task_count'], reverse=True)
 
         total_tasks = sum(s['task_count'] for s in stages)
-        total_hours = round(sum(s['planned_hours'] for s in stages), 2)
+        total_hours = round(sum(s['allocated_hours'] for s in stages), 2)
 
         return {
             'total_tasks': total_tasks,
-            'total_planned_hours': total_hours,
+            'total_allocated_hours': total_hours,
             'stages': stages
         }
 
