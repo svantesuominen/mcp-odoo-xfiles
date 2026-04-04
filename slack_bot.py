@@ -36,9 +36,9 @@ async def _post_status(ack, say, body, period: str):
         return
     await ack()
     try:
-        # Lazy import avoids circular dependency when server.py imports this module
-        from server import get_team_status
-        text = get_team_status(period=period, format="slack")
+        # Import the raw function (not the FastMCP-wrapped FunctionTool object)
+        from server import team_status_fn
+        text = team_status_fn(period=period, format="slack")
         await say(text)
     except Exception as e:
         _logger.error("Error fetching team status: %s", e)

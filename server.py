@@ -1582,6 +1582,10 @@ def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
         return {'error': f'Error fetching team status: {str(e)}'}
 
 
+# Keep a direct callable reference before FastMCP wraps it as a FunctionTool
+team_status_fn = get_team_status
+
+
 @mcp.tool()
 def get_helpdesk_status(period: str = "7d") -> Dict[str, Any]:
     """
