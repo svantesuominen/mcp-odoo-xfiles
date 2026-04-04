@@ -852,20 +852,33 @@ def get_team_backlog() -> Dict[str, Any]:
     """
     Current snapshot of all project tasks assigned to members of the
     Continuous Services team (department 18), grouped by stage with planned hours.
+    Includes per-assignee workload breakdown and estimated time to clear the backlog.
 
     Use this when asked about the team's current workload, backlog size,
-    capacity, or task distribution across pipeline stages.
+    capacity, task distribution across pipeline stages, or who has the most work.
+
+    Capacity assumption: 6 hours/day of productive work on backlogged tasks.
+      weeks_to_clear  = allocated_hours / 30   (6h × 5 days)
+      months_to_clear = allocated_hours / 120  (6h × 5 days × 4 weeks)
+    Tasks with allocated_hours = 0 are unestimated — they still count toward
+    task_count but do not affect the time estimates.
 
     Returns keys:
-        total_tasks, total_allocated_hours,
-        stages (list with stage_id, stage_name, task_count, allocated_hours,
-                tasks (list with id, name, project_name, allocated_hours, url)).
+        total_tasks, total_allocated_hours, unestimated_tasks,
+        stages (list with stage_name, task_count, allocated_hours,
+                tasks (list with id, name, project_name, assignees,
+                       allocated_hours, url)),
+        by_assignee (list sorted by allocated_hours desc, each with:
+                     assignee, task_count, allocated_hours,
+                     unestimated_task_count, weeks_to_clear, months_to_clear,
+                     tasks (list with id, name, stage, project_name,
+                            allocated_hours, url)).
     """
     try:
         uid, models = get_odoo_connection()
         base_url = ODOO_URL.rstrip('/')
 
-        # Step 1: Resolve dept 18 user IDs (Many2many traversal not reliable — do it safely)
+        # Step 1: Resolve dept 18 user IDs
         employees = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
             [[('department_id', '=', 18)]],
@@ -873,33 +886,75 @@ def get_team_backlog() -> Dict[str, Any]:
         user_ids = [e['user_id'][0] for e in employees if e.get('user_id')]
 
         if not user_ids:
-            return {'total_tasks': 0, 'total_planned_hours': 0.0, 'stages': []}
+            return {'total_tasks': 0, 'total_allocated_hours': 0.0,
+                    'unestimated_tasks': 0, 'stages': [], 'by_assignee': []}
 
-        # Step 2: Fetch tasks assigned to those users
+        # Step 2: Fetch tasks assigned to those users (include user_ids for assignee mapping)
         tasks = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'project.task', 'search_read',
             [[('user_ids', 'in', user_ids),
               ('stage_id.name', 'not ilike', 'done'),
               ('stage_id.name', 'not ilike', 'cancel')]],
-            {'fields': ['id', 'name', 'stage_id', 'allocated_hours', 'project_id'], 'limit': 1000})
+            {'fields': ['id', 'name', 'stage_id', 'allocated_hours',
+                        'project_id', 'user_ids'], 'limit': 1000})
 
-        # Step 3: Group by stage name (merge across projects — same name = same logical stage)
+        # Step 3: Bulk-resolve user IDs → names in one call
+        all_task_user_ids = list({u for t in tasks for u in (t.get('user_ids') or [])})
+        user_map: Dict[int, str] = {}
+        if all_task_user_ids:
+            user_records = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                'res.users', 'read',
+                [all_task_user_ids],
+                {'fields': ['id', 'name']})
+            user_map = {u['id']: u['name'] for u in user_records}
+
+        # Step 4: Group by stage name and build per-assignee data simultaneously
         stage_data: Dict[str, Dict] = {}
+        assignee_data: Dict[str, Dict] = {}
+
         for task in tasks:
             if not task.get('stage_id'):
                 continue
-            sname = task['stage_id'][1]
+            sname     = task['stage_id'][1]
+            proj_name = task['project_id'][1] if task.get('project_id') else ''
+            hours     = task.get('allocated_hours') or 0.0
+            task_url  = f"{base_url}/web#id={task['id']}&model=project.task&view_type=form"
+            assignees = [user_map.get(u, f'User#{u}') for u in (task.get('user_ids') or [])]
+
+            # Stage grouping
             if sname not in stage_data:
                 stage_data[sname] = {'tasks': []}
-            proj_name = task['project_id'][1] if task.get('project_id') else ''
             stage_data[sname]['tasks'].append({
                 'id': task['id'],
                 'name': task['name'],
                 'project_name': proj_name,
-                'allocated_hours': task.get('allocated_hours') or 0.0,
-                'url': f"{base_url}/web#id={task['id']}&model=project.task&view_type=form"
+                'assignees': assignees,
+                'allocated_hours': hours,
+                'url': task_url,
             })
 
+            # Per-assignee grouping — a task with multiple assignees counts for each
+            for aname in (assignees or ['(unassigned)']):
+                if aname not in assignee_data:
+                    assignee_data[aname] = {
+                        'task_count': 0, 'allocated_hours': 0.0,
+                        'unestimated_task_count': 0, 'tasks': []
+                    }
+                assignee_data[aname]['task_count'] += 1
+                assignee_data[aname]['allocated_hours'] = round(
+                    assignee_data[aname]['allocated_hours'] + hours, 2)
+                if hours == 0.0:
+                    assignee_data[aname]['unestimated_task_count'] += 1
+                assignee_data[aname]['tasks'].append({
+                    'id': task['id'],
+                    'name': task['name'],
+                    'stage': sname,
+                    'project_name': proj_name,
+                    'allocated_hours': hours,
+                    'url': task_url,
+                })
+
+        # Step 5: Build stages list
         stages = []
         for sname, data in stage_data.items():
             allocated = round(sum(t['allocated_hours'] for t in data['tasks']), 2)
@@ -909,17 +964,35 @@ def get_team_backlog() -> Dict[str, Any]:
                 'allocated_hours': allocated,
                 'tasks': sorted(data['tasks'], key=lambda t: t['allocated_hours'], reverse=True)
             })
-
-        # Sort stages by task count descending
         stages.sort(key=lambda s: s['task_count'], reverse=True)
+
+        # Step 6: Build by_assignee list with time-to-clear estimates
+        HOURS_PER_WEEK  = 6 * 5       # 30
+        HOURS_PER_MONTH = 6 * 5 * 4   # 120
+        by_assignee = []
+        for aname, adata in assignee_data.items():
+            h = adata['allocated_hours']
+            by_assignee.append({
+                'assignee': aname,
+                'task_count': adata['task_count'],
+                'allocated_hours': h,
+                'unestimated_task_count': adata['unestimated_task_count'],
+                'weeks_to_clear': round(h / HOURS_PER_WEEK, 2) if h > 0 else 0.0,
+                'months_to_clear': round(h / HOURS_PER_MONTH, 2) if h > 0 else 0.0,
+                'tasks': sorted(adata['tasks'], key=lambda t: t['allocated_hours'], reverse=True),
+            })
+        by_assignee.sort(key=lambda x: x['allocated_hours'], reverse=True)
 
         total_tasks = sum(s['task_count'] for s in stages)
         total_hours = round(sum(s['allocated_hours'] for s in stages), 2)
+        unestimated = sum(1 for t in tasks if not (t.get('allocated_hours') or 0.0))
 
         return {
             'total_tasks': total_tasks,
             'total_allocated_hours': total_hours,
-            'stages': stages
+            'unestimated_tasks': unestimated,
+            'stages': stages,
+            'by_assignee': by_assignee,
         }
 
     except Exception as e:
