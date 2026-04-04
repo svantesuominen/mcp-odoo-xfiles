@@ -1245,7 +1245,7 @@ def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
         resolved_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'search_count',
             [BASE_TICKET_DOMAIN + [
-                ('write_date', '>=', start_dt),
+                ('date_last_stage_update', '>=', start_dt),
                 '|', ('stage_id.name', 'ilike', 'solved'),
                      ('stage_id.name', 'ilike', 'approv')
             ]])
@@ -1619,7 +1619,7 @@ def get_helpdesk_status(period: str = "7d") -> Dict[str, Any]:
         resolved_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'helpdesk.ticket', 'search_count',
             [BASE_TICKET_DOMAIN + [
-                ('write_date', '>=', start_dt),
+                ('date_last_stage_update', '>=', start_dt),
                 '|', ('stage_id.name', 'ilike', 'solved'),
                      ('stage_id.name', 'ilike', 'approv')
             ]])
