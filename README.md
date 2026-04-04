@@ -1,6 +1,6 @@
 # Odoo Helpdesk Agent MCP
 
-**Version:** 2026-04-04 | **Author:** Svante
+**Version:** 2026-04-04 (r2) | **Author:** Svante
 
 A Model Context Protocol (MCP) server that empowers AI assistants (like Claude) to act as expert Odoo Helpdesk agents. It bridges the gap between Odoo's Helpdesk module and your AI assistant, providing real-time ticket data, trend analysis, and documentation lookup.
 
@@ -27,6 +27,14 @@ All ticket tools are scoped to **helpdesk team 2** and exclude Cancelled tickets
 - **Solved** — issue resolved and closed.
 - **Approval** — work completed, waiting for customer confirmation.
 - **Cancelled** — excluded from all results (noise).
+
+### Timesheets & Project Work
+
+| Tool | Description |
+| :--- | :--- |
+| `get_rd_hours` | Logged hours on R&D projects by project/task + open R&D tasks assigned to the team |
+| `get_team_hours` | Department 18 hours split into customer vs internal, per employee |
+| `get_team_backlog` | Current project tasks for department 18 users grouped by pipeline stage with planned hours |
 
 ### Documentation & Code
 | Tool | Description |

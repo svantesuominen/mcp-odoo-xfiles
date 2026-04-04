@@ -25,8 +25,9 @@ BASE_TICKET_DOMAIN = [
     ('stage_id.name', 'not ilike', 'cancel'),
 ]
 
-SERVER_VERSION = "2026-04-04"
-SERVER_AUTHOR  = "Svante"
+SERVER_VERSION    = "2026-04-04"
+SERVER_AUTHOR     = "Svante"
+SERVER_START_TIME = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 # Initialize MCP
 mcp = FastMCP("Odoo Helpdesk Agent")
@@ -617,10 +618,284 @@ def get_server_info() -> Dict[str, Any]:
     return {
         "version": SERVER_VERSION,
         "author": SERVER_AUTHOR,
+        "server_start_time": SERVER_START_TIME,
         "service": "Odoo Helpdesk Agent",
         "odoo_url": ODOO_URL,
         "helpdesk_team_id": HELPDESK_TEAM_ID,
     }
+
+
+@mcp.tool()
+def get_rd_hours(months: int = 3) -> Dict[str, Any]:
+    """
+    Fetch logged timesheet hours on R&D projects for the last N months (default 3),
+    plus all current open tasks in those projects assigned to the team (department 18).
+
+    Use this when asked about R&D investment, engineering hours, technical projects,
+    or what R&D work the team has planned or in progress.
+
+    Returns keys:
+        period_months, start_date, total_logged_hours,
+        projects (list with project_id, project_name, logged_hours,
+                  timesheet_tasks (task + hours), open_tasks (task + stage + planned_hours + url)).
+    """
+    try:
+        uid, models = get_odoo_connection()
+        base_url = ODOO_URL.rstrip('/')
+        start_date = (datetime.now() - timedelta(days=30 * months)).strftime('%Y-%m-%d')
+
+        # Step 1: Fetch dept 18 user IDs for open-task filtering
+        employees = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('department_id', '=', 18)]],
+            {'fields': ['user_id'], 'limit': 200})
+        dept18_user_ids = [e['user_id'][0] for e in employees if e.get('user_id')]
+
+        # Step 2: Timesheet lines on R&D projects within the period
+        ts_domain = [
+            ('project_id.name', 'ilike', 'r&d'),
+            ('date', '>=', start_date),
+        ]
+        ts_lines = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [ts_domain],
+            {'fields': ['unit_amount', 'project_id', 'task_id'], 'limit': 2000})
+
+        # Group timesheet lines by project then task
+        proj_ts: Dict[int, Dict] = {}
+        for line in ts_lines:
+            if not line.get('project_id'):
+                continue
+            pid, pname = line['project_id']
+            if pid not in proj_ts:
+                proj_ts[pid] = {'project_name': pname, 'logged_hours': 0.0, 'tasks': {}}
+            proj_ts[pid]['logged_hours'] = round(proj_ts[pid]['logged_hours'] + line['unit_amount'], 2)
+            if line.get('task_id'):
+                tid, tname = line['task_id']
+                proj_ts[pid]['tasks'][tid] = proj_ts[pid]['tasks'].get(tid, {'task_name': tname, 'hours': 0.0})
+                proj_ts[pid]['tasks'][tid]['hours'] = round(proj_ts[pid]['tasks'][tid]['hours'] + line['unit_amount'], 2)
+
+        # Step 3: Open tasks on R&D projects assigned to dept 18
+        task_domain = [('project_id.name', 'ilike', 'r&d')]
+        if dept18_user_ids:
+            task_domain.append(('user_ids', 'in', dept18_user_ids))
+        open_tasks = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [task_domain],
+            {'fields': ['id', 'name', 'project_id', 'stage_id', 'planned_hours'], 'limit': 500})
+
+        # Group open tasks by project
+        proj_tasks: Dict[int, list] = {}
+        for task in open_tasks:
+            if not task.get('project_id'):
+                continue
+            pid, pname = task['project_id']
+            if pid not in proj_tasks:
+                proj_tasks[pid] = []
+            stage_name = task['stage_id'][1] if task.get('stage_id') else 'Unknown'
+            proj_tasks[pid].append({
+                'task_id': task['id'],
+                'task_name': task['name'],
+                'stage': stage_name,
+                'planned_hours': task.get('planned_hours') or 0.0,
+                'url': f"{base_url}/web#id={task['id']}&model=project.task&view_type=form"
+            })
+
+        # Merge into unified project list
+        all_project_ids = set(proj_ts.keys()) | set(proj_tasks.keys())
+
+        # Resolve names for projects that only appear in open tasks
+        missing_ids = [pid for pid in all_project_ids if pid not in proj_ts]
+        if missing_ids:
+            proj_records = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                'project.project', 'read',
+                [missing_ids], {'fields': ['id', 'name']})
+            for p in proj_records:
+                proj_ts[p['id']] = {'project_name': p['name'], 'logged_hours': 0.0, 'tasks': {}}
+
+        projects = []
+        for pid in sorted(all_project_ids):
+            entry = proj_ts.get(pid, {'project_name': str(pid), 'logged_hours': 0.0, 'tasks': {}})
+            projects.append({
+                'project_id': pid,
+                'project_name': entry['project_name'],
+                'logged_hours': entry['logged_hours'],
+                'timesheet_tasks': [
+                    {'task_id': tid, 'task_name': tdata['task_name'], 'hours': tdata['hours']}
+                    for tid, tdata in entry['tasks'].items()
+                ],
+                'open_tasks': proj_tasks.get(pid, [])
+            })
+
+        total_logged = round(sum(p['logged_hours'] for p in projects), 2)
+        return {
+            'period_months': months,
+            'start_date': start_date,
+            'total_logged_hours': total_logged,
+            'projects': projects
+        }
+
+    except Exception as e:
+        return {'error': f'Error fetching R&D hours: {str(e)}'}
+
+
+@mcp.tool()
+def get_team_hours(months: int = 1) -> Dict[str, Any]:
+    """
+    Fetch all timesheet entries for the Continuous Services team (department 18)
+    for the last N months (default 1). Splits hours into customer hours
+    (projects with a customer/partner set) vs internal hours.
+
+    Use this when asked about team workload, customer vs internal hours,
+    billable hours, or individual utilisation.
+
+    Returns keys:
+        period_months, start_date, total_hours, customer_hours, internal_hours,
+        by_employee (list with employee_id, employee_name, total_hours,
+                     customer_hours, internal_hours).
+    """
+    try:
+        uid, models = get_odoo_connection()
+        start_date = (datetime.now() - timedelta(days=30 * months)).strftime('%Y-%m-%d')
+
+        # Step 1: Fetch timesheet lines for dept 18
+        ts_domain = [
+            ('employee_id.department_id', '=', 18),
+            ('date', '>=', start_date),
+        ]
+        ts_lines = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'account.analytic.line', 'search_read',
+            [ts_domain],
+            {'fields': ['unit_amount', 'project_id', 'employee_id'], 'limit': 5000})
+
+        if not ts_lines:
+            return {
+                'period_months': months, 'start_date': start_date,
+                'total_hours': 0.0, 'customer_hours': 0.0, 'internal_hours': 0.0,
+                'by_employee': []
+            }
+
+        # Step 2: Resolve which projects have a customer (single bulk read)
+        all_proj_ids = list({line['project_id'][0] for line in ts_lines if line.get('project_id')})
+        proj_records = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'project.project', 'read',
+            [all_proj_ids], {'fields': ['id', 'partner_id']})
+        customer_project_ids = {p['id'] for p in proj_records if p.get('partner_id')}
+
+        # Step 3: Aggregate by employee
+        emp_data: Dict[int, Dict] = {}
+        for line in ts_lines:
+            if not line.get('employee_id'):
+                continue
+            eid, ename = line['employee_id']
+            hours = line['unit_amount']
+            if eid not in emp_data:
+                emp_data[eid] = {'employee_name': ename, 'total_hours': 0.0,
+                                 'customer_hours': 0.0, 'internal_hours': 0.0}
+            emp_data[eid]['total_hours'] = round(emp_data[eid]['total_hours'] + hours, 2)
+            pid = line['project_id'][0] if line.get('project_id') else None
+            if pid and pid in customer_project_ids:
+                emp_data[eid]['customer_hours'] = round(emp_data[eid]['customer_hours'] + hours, 2)
+            else:
+                emp_data[eid]['internal_hours'] = round(emp_data[eid]['internal_hours'] + hours, 2)
+
+        by_employee = sorted(
+            [{'employee_id': eid, **data} for eid, data in emp_data.items()],
+            key=lambda x: x['total_hours'], reverse=True
+        )
+        total = round(sum(e['total_hours'] for e in by_employee), 2)
+        cust  = round(sum(e['customer_hours'] for e in by_employee), 2)
+        intl  = round(sum(e['internal_hours'] for e in by_employee), 2)
+
+        return {
+            'period_months': months,
+            'start_date': start_date,
+            'total_hours': total,
+            'customer_hours': cust,
+            'internal_hours': intl,
+            'by_employee': by_employee
+        }
+
+    except Exception as e:
+        return {'error': f'Error fetching team hours: {str(e)}'}
+
+
+@mcp.tool()
+def get_team_backlog() -> Dict[str, Any]:
+    """
+    Current snapshot of all project tasks assigned to members of the
+    Continuous Services team (department 18), grouped by stage with planned hours.
+
+    Use this when asked about the team's current workload, backlog size,
+    capacity, or task distribution across pipeline stages.
+
+    Returns keys:
+        total_tasks, total_planned_hours,
+        stages (list with stage_id, stage_name, task_count, planned_hours,
+                tasks (list with id, name, project_name, planned_hours, url)).
+    """
+    try:
+        uid, models = get_odoo_connection()
+        base_url = ODOO_URL.rstrip('/')
+
+        # Step 1: Resolve dept 18 user IDs (Many2many traversal not reliable — do it safely)
+        employees = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('department_id', '=', 18)]],
+            {'fields': ['user_id'], 'limit': 200})
+        user_ids = [e['user_id'][0] for e in employees if e.get('user_id')]
+
+        if not user_ids:
+            return {'total_tasks': 0, 'total_planned_hours': 0.0, 'stages': []}
+
+        # Step 2: Fetch tasks assigned to those users
+        tasks = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'project.task', 'search_read',
+            [[('user_ids', 'in', user_ids)]],
+            {'fields': ['id', 'name', 'stage_id', 'planned_hours', 'project_id'], 'limit': 1000})
+
+        # Step 3: Group by stage
+        stage_data: Dict[int, Dict] = {}
+        for task in tasks:
+            if not task.get('stage_id'):
+                continue
+            sid, sname = task['stage_id']
+            if sid not in stage_data:
+                stage_data[sid] = {'stage_name': sname, 'tasks': []}
+            proj_name = task['project_id'][1] if task.get('project_id') else ''
+            stage_data[sid]['tasks'].append({
+                'id': task['id'],
+                'name': task['name'],
+                'project_name': proj_name,
+                'planned_hours': task.get('planned_hours') or 0.0,
+                'url': f"{base_url}/web#id={task['id']}&model=project.task&view_type=form"
+            })
+
+        stages = []
+        for sid, data in stage_data.items():
+            planned = round(sum(t['planned_hours'] for t in data['tasks']), 2)
+            stages.append({
+                'stage_id': sid,
+                'stage_name': data['stage_name'],
+                'task_count': len(data['tasks']),
+                'planned_hours': planned,
+                'tasks': sorted(data['tasks'], key=lambda t: t['planned_hours'], reverse=True)
+            })
+
+        # Sort stages by task count descending
+        stages.sort(key=lambda s: s['task_count'], reverse=True)
+
+        total_tasks = sum(s['task_count'] for s in stages)
+        total_hours = round(sum(s['planned_hours'] for s in stages), 2)
+
+        return {
+            'total_tasks': total_tasks,
+            'total_planned_hours': total_hours,
+            'stages': stages
+        }
+
+    except Exception as e:
+        return {'error': f'Error fetching team backlog: {str(e)}'}
 
 
 @mcp.custom_route("/", methods=["GET"])
@@ -631,6 +906,7 @@ async def index(request):
         "service": "Odoo Helpdesk Agent",
         "version": SERVER_VERSION,
         "author": SERVER_AUTHOR,
+        "server_start_time": SERVER_START_TIME,
         "mcp_ready": True
     })
 
