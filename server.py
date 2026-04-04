@@ -1106,7 +1106,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url,
     s1 = (
         f"*1. Customer Service*\n"
         f"*{cs['new_tickets']} new tickets,* {cs['resolved_tickets']} resolved. "
-        f"Open: {cs['open_new']} new / {cs['open_message']} awaiting msg / "
+        f"Now open: {cs['open_new']} new / {cs['open_message']} awaiting msg / "
         f"{cs['open_in_progress']} in progress (*{cs['open_tickets']} total*).\n"
         f"Recent: {top}."
     )
@@ -1125,16 +1125,19 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url,
         conn_str = f"{_sl(conn['url'], 'last connectivity issue')} ({conn_ago})"
     else:
         conn_str = "no connectivity tickets"
-    infra_days = round(tm['infra_total_hours'] / 6) if tm['infra_total_hours'] else 0
     top_infra = sorted(tm.get('infra_tasks', []),
                        key=lambda t: t.get('allocated_hours', 0), reverse=True)[:3]
     infra_links = ", ".join(_sl(t['url'], t['name']) for t in top_infra)
+    top_ts_links = ", ".join(
+        f"{_sl(t['url'], t['name'])} {t['logged_hours']} h"
+        for t in tm.get('top_tasks', [])
+    )
     s2 = (
         f"*2. Tech Maintenance*\n"
         f"*Logged {tm['total_hours']} h* ({emp_str}).\n"
-        f"{conn_str}. "
-        f"Infra tasks open: {tm['infra_task_count']} ({round(tm['infra_total_hours'])} h). "
-        + (f"Biggest: {infra_links}." if infra_links else "")
+        f"{conn_str}. Infra tasks open: {tm['infra_task_count']} ({round(tm['infra_total_hours'])} h)."
+        + (f"\nTop timesheet tasks: {top_ts_links}." if top_ts_links else "")
+        + (f"\nBiggest tasks open: {infra_links}." if infra_links else "")
     )
 
     # 3. Key Account Management
@@ -1174,7 +1177,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url,
     )
     s5a = (
         f"*5. Development Work Done*\n"
-        f"*{dw['total_hours']} h* total, {dw['customer_hours']} h customer "
+        f"*{dw['total_hours']} h* total, *{dw['customer_hours']} h* customer "
         f"(*{dw['customer_pct']} %*), est. income *{dw['total_estimated_income']:.0f} €*.\n"
         f"{done_list}."
     )
@@ -1316,9 +1319,10 @@ def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
             'account.analytic.line', 'search_read',
             [[('project_id', 'in', MAINT_PROJECT_IDS),
               ('date', '>=', start_d), ('date', '<=', today_str)]],
-            {'fields': ['unit_amount', 'so_line', 'employee_id'], 'limit': 5000})
+            {'fields': ['unit_amount', 'so_line', 'employee_id', 'task_id'], 'limit': 5000})
 
         maint_emp_data: Dict[int, Dict] = {}
+        maint_task_hours: Dict[int, float] = {}
         for line in maint_ts:
             if not line.get('employee_id'):
                 continue
@@ -1332,6 +1336,24 @@ def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
             if line.get('so_line'):
                 maint_emp_data[eid]['customer_hours'] = round(
                     maint_emp_data[eid]['customer_hours'] + h, 2)
+            if line.get('task_id'):
+                tid = line['task_id'][0]
+                maint_task_hours[tid] = round(maint_task_hours.get(tid, 0.0) + h, 2)
+
+        # Top tasks by logged hours in the period
+        top_maint_task_ids = sorted(maint_task_hours, key=lambda x: -maint_task_hours[x])[:3]
+        top_maint_tasks = []
+        if top_maint_task_ids:
+            maint_task_raw = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                'project.task', 'read', [top_maint_task_ids],
+                {'fields': ['id', 'name']})
+            top_maint_tasks = [
+                {'name': t['name'],
+                 'logged_hours': maint_task_hours.get(t['id'], 0.0),
+                 'url': f"{base_url}/web#id={t['id']}&model=project.task&view_type=form"}
+                for t in maint_task_raw
+            ]
+            top_maint_tasks.sort(key=lambda x: -x['logged_hours'])
 
         maint_total = round(sum(e['total_hours'] for e in maint_emp_data.values()), 2)
         maint_customer = round(sum(e['customer_hours'] for e in maint_emp_data.values()), 2)
@@ -1398,6 +1420,7 @@ def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
             'infra_tasks': infra_tasks,
             'infra_task_count': len(infra_tasks),
             'infra_total_hours': infra_total_hours,
+            'top_tasks': top_maint_tasks,
         }
 
         # ── Section 3: Key Account Management (Activities) ──────────────
