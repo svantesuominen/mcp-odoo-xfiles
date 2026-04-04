@@ -1124,13 +1124,13 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
     - Development Work — DONE (this period):
         Sentence 1: "Last [period_label]: total_hours h total, customer_hours h customer
         (customer_pct%), estimated income total_estimated_income €."
-        Sentence 2: List by_person_done briefly — name: total_hours h, customer_hours h cust,
-        estimated_income €. Include every person in by_person_done.
+        Sentence 2: List by_person_done — format each as "name: (total_hours h, customer_pct%, estimated_income €)"
+        where customer_pct = round(customer_hours / total_hours * 100). Include every person.
     - Development Work — TO BE DONE (backlog):
         Sentence 1: backlog_remaining_hours h remaining across backlog_by_stage total tasks
         (breakdown by stage: backlog / in_progress / acceptance / ready_for_production).
-        Sentence 2: Per person from by_person list — name: days_of_work days (6 h/day).
-        Include every person in by_person.
+        Sentence 2: Per person from by_person list — format as "name (N days)" using round(days_of_work)
+        with no decimal places and no hours. Include every person.
     If a section has zero data, say so briefly (1 sentence).
     ALWAYS render names as markdown links [name](url) when a url field is present.
     """
