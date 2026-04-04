@@ -1096,7 +1096,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
         f"*1. Customer Service*\n"
         f"{cs['new_tickets']} new tickets, {cs['resolved_tickets']} resolved. "
         f"Open: {cs['open_new']} new / {cs['open_message']} awaiting msg / "
-        f"{cs['open_in_progress']} in progress ({cs['open_tickets']} total). "
+        f"{cs['open_in_progress']} in progress ({cs['open_tickets']} total).\n"
         f"Recent: {top}."
     )
 
@@ -1111,7 +1111,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     )
     s2 = (
         f"*2. Tech Maintenance*\n"
-        f"Logged {tm['total_hours']} h ({emp_str}). "
+        f"Logged {tm['total_hours']} h ({emp_str}).\n"
         f"Connectivity tickets total: {tm['connectivity_count']}, last: {conn_str}. "
         f"Infra tasks open: {tm['infra_task_count']} ({tm['infra_total_hours']} h allocated)."
     )
@@ -1140,7 +1140,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     )
     s4 = (
         f"*4. R&D & AI*\n"
-        f"Logged {rd['logged_hours']} h across {rd['worked_tasks_count']} tasks. "
+        f"Logged {rd['logged_hours']} h across {rd['worked_tasks_count']} tasks.\n"
         + (f"Top: {task_links}." if task_links else "No R&D hours this period.")
     )
 
@@ -1154,7 +1154,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     s5a = (
         f"*5a. Development Work — Done*\n"
         f"{dw['total_hours']} h total, {dw['customer_hours']} h customer "
-        f"({dw['customer_pct']} %), est. income {dw['total_estimated_income']:.0f} €. "
+        f"({dw['customer_pct']} %), est. income {dw['total_estimated_income']:.0f} €.\n"
         f"{done_list}."
     )
 
@@ -1169,7 +1169,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
         f"{dw['backlog_remaining_hours']} h remaining, "
         f"{bl.get('total', 0)} tasks "
         f"({bl.get('backlog', 0)} backlog / {bl.get('in_progress', 0)} in progress / "
-        f"{bl.get('acceptance', 0)} acceptance / {bl.get('ready_for_production', 0)} ready). "
+        f"{bl.get('acceptance', 0)} acceptance / {bl.get('ready_for_production', 0)} ready).\n"
         f"{people_str}."
     )
 
