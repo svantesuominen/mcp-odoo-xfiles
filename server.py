@@ -1077,14 +1077,24 @@ def get_department_activities(days: int = 7) -> Dict[str, Any]:
         return {'error': f'Error fetching department activities: {str(e)}'}
 
 
-def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
+def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url,
+                        start_d: str = "", end_d: str = "") -> str:
     """Format team status data as a Slack-ready string (uses <url|text> link syntax)."""
 
     def _sl(url, text):
         """Slack link helper."""
         return f"<{url}|{text}>" if url else text
 
-    header = f"*Continuous Services {period_label} update*"
+    def _fmt_date(d: str) -> str:
+        """Format YYYY-MM-DD as 'Apr 4'."""
+        try:
+            return datetime.strptime(d, '%Y-%m-%d').strftime('%b %-d')
+        except Exception:
+            return d
+
+    date_range = (f" ({_fmt_date(start_d)} – {_fmt_date(end_d)})"
+                  if start_d and end_d else "")
+    header = f"*Continuous Services {period_label} update{date_range}*"
 
     # 1. Customer Service
     top = ", ".join(
@@ -1094,9 +1104,9 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     )
     s1 = (
         f"*1. Customer Service*\n"
-        f"{cs['new_tickets']} new tickets, {cs['resolved_tickets']} resolved. "
+        f"*{cs['new_tickets']} new tickets,* {cs['resolved_tickets']} resolved. "
         f"Open: {cs['open_new']} new / {cs['open_message']} awaiting msg / "
-        f"{cs['open_in_progress']} in progress ({cs['open_tickets']} total).\n"
+        f"{cs['open_in_progress']} in progress (*{cs['open_tickets']} total*).\n"
         f"Recent: {top}."
     )
 
@@ -1120,7 +1130,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     infra_links = ", ".join(_sl(t['url'], t['name']) for t in top_infra)
     s2 = (
         f"*2. Tech Maintenance*\n"
-        f"Logged {tm['total_hours']} h ({emp_str}).\n"
+        f"*Logged {tm['total_hours']} h* ({emp_str}).\n"
         f"{conn_str}. "
         f"Infra tasks open: {tm['infra_task_count']} ({round(tm['infra_total_hours'])} h). "
         + (f"Biggest: {infra_links}." if infra_links else "")
@@ -1137,8 +1147,8 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     )
     s3 = (
         f"*3. Key Account Management*\n"
-        f"Team had {kam['crm_count']} CRM activities and "
-        f"{kam['partner_count']} partner activities.\n"
+        f"Team had *{kam['crm_count']}* CRM activities and "
+        f"*{kam['partner_count']}* partner activities.\n"
         + (f"Leads: {crm_links}.\n" if crm_links else "")
         + (f"Partners: {partner_links}." if partner_links else "")
     )
@@ -1150,7 +1160,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     )
     s4 = (
         f"*4. R&D & AI*\n"
-        f"Logged {rd['logged_hours']} h across {rd['worked_tasks_count']} tasks.\n"
+        f"*{rd['logged_hours']} h* across *{rd['worked_tasks_count']} tasks*.\n"
         + (f"Top: {task_links}." if task_links else "No R&D hours this period.")
     )
 
@@ -1163,8 +1173,8 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     )
     s5a = (
         f"*5. Development Work Done*\n"
-        f"{dw['total_hours']} h total, {dw['customer_hours']} h customer "
-        f"({dw['customer_pct']} %), est. income {dw['total_estimated_income']:.0f} €.\n"
+        f"*{dw['total_hours']} h* total, {dw['customer_hours']} h customer "
+        f"(*{dw['customer_pct']} %*), est. income *{dw['total_estimated_income']:.0f} €*.\n"
         f"{done_list}."
     )
 
@@ -1176,7 +1186,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     )
     s5b = (
         f"*6. Development Work Todo*\n"
-        f"{dw['backlog_remaining_hours']} h remaining, "
+        f"*{dw['backlog_remaining_hours']} h* remaining, "
         f"{bl.get('total', 0)} tasks "
         f"({bl.get('backlog', 0)} backlog / {bl.get('in_progress', 0)} in progress / "
         f"{bl.get('acceptance', 0)} acceptance / {bl.get('ready_for_production', 0)} ready).\n"
@@ -1580,7 +1590,8 @@ def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
         if format == "slack":
             return _format_team_status(
                 customer_service, tech_maintenance, key_account_management,
-                rd_and_ai, development_work, period_label, base_url)
+                rd_and_ai, development_work, period_label, base_url,
+                start_d=start_d, end_d=today_str)
 
         return {
             'period': period,
