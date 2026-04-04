@@ -744,23 +744,26 @@ def get_rd_hours(months: int = 3) -> Dict[str, Any]:
 
 
 @mcp.tool()
-def get_team_hours(months: int = 1) -> Dict[str, Any]:
+def get_team_hours(days: int = 7) -> Dict[str, Any]:
     """
     Fetch all timesheet entries for the Continuous Services team (department 18)
-    for the last N months (default 1). Splits hours into customer hours
-    (projects with a customer/partner set) vs internal hours.
+    for the last N days (default 7). Splits hours into customer hours
+    (projects with a customer/partner set) vs internal hours, and flags missing hours.
 
     Use this when asked about team workload, customer vs internal hours,
-    billable hours, or individual utilisation.
+    billable hours, individual utilisation, or missing timesheets.
 
     Returns keys:
-        period_months, start_date, total_hours, customer_hours, internal_hours,
+        days, start_date, total_hours, customer_hours, internal_hours,
         by_employee (list with employee_id, employee_name, total_hours,
-                     customer_hours, internal_hours).
+                     customer_hours, internal_hours, customer_pct,
+                     expected_hours, missing_hours).
+        missing_hours > 0 means the employee logged fewer hours than expected
+        (days * 8 working hours). Flag if missing_hours > 2.
     """
     try:
         uid, models = get_odoo_connection()
-        start_date = (datetime.now() - timedelta(days=30 * months)).strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
 
         # Step 1: Fetch timesheet lines for dept 18
         ts_domain = [
@@ -772,22 +775,27 @@ def get_team_hours(months: int = 1) -> Dict[str, Any]:
             [ts_domain],
             {'fields': ['unit_amount', 'project_id', 'employee_id'], 'limit': 5000})
 
-        if not ts_lines:
-            return {
-                'period_months': months, 'start_date': start_date,
-                'total_hours': 0.0, 'customer_hours': 0.0, 'internal_hours': 0.0,
-                'by_employee': []
-            }
-
         # Step 2: Resolve which projects have a customer (single bulk read)
         all_proj_ids = list({line['project_id'][0] for line in ts_lines if line.get('project_id')})
-        proj_records = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
-            'project.project', 'read',
-            [all_proj_ids], {'fields': ['id', 'partner_id']})
-        customer_project_ids = {p['id'] for p in proj_records if p.get('partner_id')}
+        customer_project_ids: set = set()
+        if all_proj_ids:
+            proj_records = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                'project.project', 'read',
+                [all_proj_ids], {'fields': ['id', 'partner_id']})
+            customer_project_ids = {p['id'] for p in proj_records if p.get('partner_id')}
 
-        # Step 3: Aggregate by employee
-        emp_data: Dict[int, Dict] = {}
+        # Step 3: Collect all dept 18 employees (even those with no entries)
+        employees = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('department_id', '=', 18)]],
+            {'fields': ['id', 'name'], 'limit': 200})
+        emp_data: Dict[int, Dict] = {
+            e['id']: {'employee_name': e['name'], 'total_hours': 0.0,
+                      'customer_hours': 0.0, 'internal_hours': 0.0}
+            for e in employees
+        }
+
+        # Step 4: Aggregate by employee
         for line in ts_lines:
             if not line.get('employee_id'):
                 continue
@@ -803,20 +811,35 @@ def get_team_hours(months: int = 1) -> Dict[str, Any]:
             else:
                 emp_data[eid]['internal_hours'] = round(emp_data[eid]['internal_hours'] + hours, 2)
 
-        by_employee = sorted(
-            [{'employee_id': eid, **data} for eid, data in emp_data.items()],
-            key=lambda x: x['total_hours'], reverse=True
-        )
-        total = round(sum(e['total_hours'] for e in by_employee), 2)
-        cust  = round(sum(e['customer_hours'] for e in by_employee), 2)
-        intl  = round(sum(e['internal_hours'] for e in by_employee), 2)
+        # Step 5: Compute derived fields
+        expected_hours = round(days * 8.0, 1)
+        by_employee = []
+        for eid, data in emp_data.items():
+            total = data['total_hours']
+            cust_h = data['customer_hours']
+            missing = round(max(0.0, expected_hours - total), 2)
+            by_employee.append({
+                'employee_id': eid,
+                'employee_name': data['employee_name'],
+                'total_hours': total,
+                'customer_hours': cust_h,
+                'internal_hours': data['internal_hours'],
+                'customer_pct': round(cust_h / total * 100, 1) if total > 0 else 0.0,
+                'expected_hours': expected_hours,
+                'missing_hours': missing,
+            })
+
+        by_employee.sort(key=lambda x: x['total_hours'], reverse=True)
+        total_all = round(sum(e['total_hours'] for e in by_employee), 2)
+        cust_all  = round(sum(e['customer_hours'] for e in by_employee), 2)
+        intl_all  = round(sum(e['internal_hours'] for e in by_employee), 2)
 
         return {
-            'period_months': months,
+            'days': days,
             'start_date': start_date,
-            'total_hours': total,
-            'customer_hours': cust,
-            'internal_hours': intl,
+            'total_hours': total_all,
+            'customer_hours': cust_all,
+            'internal_hours': intl_all,
             'by_employee': by_employee
         }
 
@@ -901,6 +924,166 @@ def get_team_backlog() -> Dict[str, Any]:
 
     except Exception as e:
         return {'error': f'Error fetching team backlog: {str(e)}'}
+
+
+@mcp.tool()
+def get_department_activities(days: int = 7) -> Dict[str, Any]:
+    """
+    Fetch completed (done) activities logged by the Continuous Services team
+    (department 18) on CRM opportunities (crm.lead) and contacts (res.partner)
+    for the last N days (default 7).
+
+    In Odoo, a completed activity creates a mail.message with mail_activity_type_id
+    set. This tool surfaces those messages so you can report on customer touchpoints,
+    follow-ups, and sales/account management actions.
+
+    Use this when asked about what the team did with customers, CRM pipeline activity,
+    partner contact activity, or sales actions this week.
+
+    Returns keys:
+        days, start_date,
+        crm_activities (list with date, author, activity_type, lead_name, lead_id, body, url),
+        partner_activities (list with date, author, activity_type, partner_name, partner_id, body, url),
+        crm_count, partner_count.
+    """
+    try:
+        uid, models = get_odoo_connection()
+        base_url = ODOO_URL.rstrip('/')
+        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+
+        # Step 1: Resolve dept 18 employees → res.users partner IDs
+        employees = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'hr.employee', 'search_read',
+            [[('department_id', '=', 18)]],
+            {'fields': ['user_id'], 'limit': 200})
+        user_ids = [e['user_id'][0] for e in employees if e.get('user_id')]
+
+        if not user_ids:
+            return {
+                'days': days, 'start_date': start_date,
+                'crm_activities': [], 'partner_activities': [],
+                'crm_count': 0, 'partner_count': 0
+            }
+
+        # Fetch partner_id for each user in one bulk call
+        users = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'res.users', 'read',
+            [user_ids],
+            {'fields': ['id', 'partner_id']})
+        dept18_partner_ids = [u['partner_id'][0] for u in users if u.get('partner_id')]
+
+        if not dept18_partner_ids:
+            return {
+                'days': days, 'start_date': start_date,
+                'crm_activities': [], 'partner_activities': [],
+                'crm_count': 0, 'partner_count': 0
+            }
+
+        # Step 2: Query done-activity messages on crm.lead and res.partner
+        msg_domain = [
+            ('model', 'in', ['crm.lead', 'res.partner']),
+            ('mail_activity_type_id', '!=', False),
+            ('author_id', 'in', dept18_partner_ids),
+            ('date', '>=', start_date),
+        ]
+        messages = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+            'mail.message', 'search_read',
+            [msg_domain],
+            {'fields': ['date', 'author_id', 'mail_activity_type_id', 'model',
+                        'res_id', 'body'], 'limit': 500,
+             'order': 'date desc'})
+
+        if not messages:
+            return {
+                'days': days, 'start_date': start_date,
+                'crm_activities': [], 'partner_activities': [],
+                'crm_count': 0, 'partner_count': 0
+            }
+
+        # Step 3: Bulk-resolve record names
+        crm_ids    = list({m['res_id'] for m in messages if m['model'] == 'crm.lead'})
+        partner_ids = list({m['res_id'] for m in messages if m['model'] == 'res.partner'})
+
+        crm_names: Dict[int, str] = {}
+        if crm_ids:
+            crm_records = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                'crm.lead', 'read', [crm_ids], {'fields': ['id', 'name']})
+            crm_names = {r['id']: r['name'] for r in crm_records}
+
+        partner_names: Dict[int, str] = {}
+        if partner_ids:
+            partner_records = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                'res.partner', 'read', [partner_ids], {'fields': ['id', 'name']})
+            partner_names = {r['id']: r['name'] for r in partner_records}
+
+        # Step 4: Build output lists
+        crm_activities = []
+        partner_activities = []
+
+        for msg in messages:
+            author = msg['author_id'][1] if msg.get('author_id') else 'Unknown'
+            activity_type = msg['mail_activity_type_id'][1] if msg.get('mail_activity_type_id') else 'Unknown'
+            rid = msg['res_id']
+
+            if msg['model'] == 'crm.lead':
+                crm_activities.append({
+                    'date': msg['date'],
+                    'author': author,
+                    'activity_type': activity_type,
+                    'lead_id': rid,
+                    'lead_name': crm_names.get(rid, f'Lead #{rid}'),
+                    'body': msg.get('body') or '',
+                    'url': f"{base_url}/web#id={rid}&model=crm.lead&view_type=form",
+                })
+            else:
+                partner_activities.append({
+                    'date': msg['date'],
+                    'author': author,
+                    'activity_type': activity_type,
+                    'partner_id': rid,
+                    'partner_name': partner_names.get(rid, f'Partner #{rid}'),
+                    'body': msg.get('body') or '',
+                    'url': f"{base_url}/web#id={rid}&model=res.partner&view_type=form",
+                })
+
+        return {
+            'days': days,
+            'start_date': start_date,
+            'crm_count': len(crm_activities),
+            'partner_count': len(partner_activities),
+            'crm_activities': crm_activities,
+            'partner_activities': partner_activities,
+        }
+
+    except Exception as e:
+        return {'error': f'Error fetching department activities: {str(e)}'}
+
+
+@mcp.tool()
+def get_weekly_update(days: int = 7) -> Dict[str, Any]:
+    """
+    Composite weekly report for the Continuous Services team (department 18).
+    Bundles four data streams into a single call:
+      1. helpdesk  – new and updated tickets in the period (get_weekly_activity)
+      2. timesheets – team hours logged, customer vs internal split (get_team_hours)
+      3. rd_hours   – R&D timesheet hours and open R&D tasks (get_rd_hours, last month)
+      4. activities – completed CRM opportunity and partner activities (get_department_activities)
+
+    Use this as the primary entry point when asked for a weekly update, weekly summary,
+    or weekly report for the team.
+
+    Args:
+        days: Number of days to look back (default 7).
+
+    Returns keys: days, helpdesk, timesheets, rd_hours, activities.
+    """
+    return {
+        'days': days,
+        'helpdesk':   get_weekly_activity(days),
+        'timesheets': get_team_hours(days),
+        'rd_hours':   get_rd_hours(months=1),
+        'activities': get_department_activities(days),
+    }
 
 
 @mcp.custom_route("/", methods=["GET"])
