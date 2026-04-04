@@ -1105,15 +1105,25 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
         f"{e['name']} {e['total_hours']} h" for e in tm['by_employee']
     )
     conn = tm.get('last_connectivity_ticket')
-    conn_str = (
-        f"{_sl(conn['url'], conn['name'])} ({conn['date']})" if conn
-        else "no connectivity tickets"
-    )
+    if conn:
+        conn_days = (datetime.now() - datetime.strptime(conn['date'], '%Y-%m-%d')).days
+        if conn_days >= 30:
+            conn_ago = f"{conn_days // 30} month{'s' if conn_days // 30 > 1 else ''} ago"
+        else:
+            conn_ago = f"{conn_days} day{'s' if conn_days != 1 else ''} ago"
+        conn_str = f"{_sl(conn['url'], 'last connectivity issue')} ({conn_ago})"
+    else:
+        conn_str = "no connectivity tickets"
+    infra_days = round(tm['infra_total_hours'] / 6) if tm['infra_total_hours'] else 0
+    top_infra = sorted(tm.get('infra_tasks', []),
+                       key=lambda t: t.get('allocated_hours', 0), reverse=True)[:3]
+    infra_links = ", ".join(_sl(t['url'], t['name']) for t in top_infra)
     s2 = (
         f"*2. Tech Maintenance*\n"
         f"Logged {tm['total_hours']} h ({emp_str}).\n"
-        f"Connectivity tickets total: {tm['connectivity_count']}, last: {conn_str}. "
-        f"Infra tasks open: {tm['infra_task_count']} ({tm['infra_total_hours']} h allocated)."
+        f"{conn_str}. "
+        f"Infra tasks open: {tm['infra_task_count']} ({tm['infra_total_hours']} h / {infra_days} days). "
+        + (f"Biggest: {infra_links}." if infra_links else "")
     )
 
     # 3. Key Account Management
