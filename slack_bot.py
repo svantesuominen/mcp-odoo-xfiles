@@ -25,10 +25,6 @@ _logger = logging.getLogger(__name__)
 
 app = AsyncApp(token=os.environ["SLACK_BOT_TOKEN"])
 
-# Import directly — no HTTP round-trip needed since we share the same process space
-from server import get_team_status
-
-
 ALLOWED_CHANNEL = os.environ.get("SLACK_ALLOWED_CHANNEL", "team-x-files")
 
 
@@ -39,6 +35,8 @@ async def _post_status(ack, say, body, period: str):
         return
     await ack()
     try:
+        # Lazy import avoids circular dependency when server.py imports this module
+        from server import get_team_status
         text = get_team_status(period=period, format="slack")
         await say(text)
     except Exception as e:
