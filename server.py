@@ -1085,13 +1085,11 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url,
         """Slack link helper."""
         return f"<{url}|{text}>" if url else text
 
-    FI_DAYS = ['Ma', 'Ti', 'Ke', 'To', 'Pe', 'La', 'Su']
-
     def _fmt_date(d: str) -> str:
-        """Format YYYY-MM-DD as Finnish 'La 28.3.'"""
+        """Format YYYY-MM-DD as 'Sat 28.3.'"""
         try:
             dt = datetime.strptime(d, '%Y-%m-%d')
-            return f"{FI_DAYS[dt.weekday()]} {dt.day}.{dt.month}."
+            return f"{dt.strftime('%a')} {dt.day}.{dt.month}."
         except Exception:
             return d
 
