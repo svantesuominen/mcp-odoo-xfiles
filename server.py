@@ -25,6 +25,9 @@ BASE_TICKET_DOMAIN = [
     ('stage_id.name', 'not ilike', 'cancel'),
 ]
 
+SERVER_VERSION = "2026-04-04"
+SERVER_AUTHOR  = "Svante"
+
 # Initialize MCP
 mcp = FastMCP("Odoo Helpdesk Agent")
 
@@ -605,12 +608,29 @@ def get_issues_analysis(months: int = 3) -> Dict[str, Any]:
         return {"error": f"Error fetching issues analysis: {str(e)}"}
 
 
+@mcp.tool()
+def get_server_info() -> Dict[str, Any]:
+    """
+    Return metadata about this MCP server: version, author, and connected Odoo instance.
+    Use this when asked about the version, who built this, or what system you are connected to.
+    """
+    return {
+        "version": SERVER_VERSION,
+        "author": SERVER_AUTHOR,
+        "service": "Odoo Helpdesk Agent",
+        "odoo_url": ODOO_URL,
+        "helpdesk_team_id": HELPDESK_TEAM_ID,
+    }
+
+
 @mcp.custom_route("/", methods=["GET"])
 async def index(request):
     """Health check endpoint for Railway."""
     return JSONResponse({
-        "status": "ok", 
+        "status": "ok",
         "service": "Odoo Helpdesk Agent",
+        "version": SERVER_VERSION,
+        "author": SERVER_AUTHOR,
         "mcp_ready": True
     })
 
