@@ -1379,12 +1379,12 @@ def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
             'helpdesk.ticket', 'search_read',
             [[('team_id', '=', HELPDESK_TEAM_ID),
               ('tag_ids.name', 'ilike', 'connection problems')]],
-            {'fields': ['id', 'name', 'write_date', 'stage_id'],
-             'order': 'write_date desc', 'limit': 1})
+            {'fields': ['id', 'name', 'create_date', 'stage_id'],
+             'order': 'create_date desc', 'limit': 1})
         last_conn = last_conn_raw[0] if last_conn_raw else None
         last_connectivity_ticket = {
             'name': last_conn['name'],
-            'date': last_conn['write_date'][:10],
+            'date': last_conn['create_date'][:10],
             'stage': last_conn['stage_id'][1] if last_conn.get('stage_id') else '',
             'url': f"{base_url}/web#id={last_conn['id']}&model=helpdesk.ticket&view_type=form"
         } if last_conn else None
