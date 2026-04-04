@@ -1119,13 +1119,18 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     # 3. Key Account Management
     crm_links = ", ".join(
         _sl(a['url'], a['lead_name']) + f" ({a['date'][:10]})"
-        for a in kam['top_crm'][:3]
+        for a in kam['top_crm'][:5]
+    )
+    partner_links = ", ".join(
+        _sl(a['url'], a['partner_name']) + f" ({a['date'][:10]})"
+        for a in kam['top_partners'][:5]
     )
     s3 = (
         f"*3. Key Account Management*\n"
         f"Team had {kam['crm_count']} CRM activities and "
-        f"{kam['partner_count']} partner activities. "
-        + (f"Top leads: {crm_links}." if crm_links else "No CRM activities this period.")
+        f"{kam['partner_count']} partner activities.\n"
+        + (f"Leads: {crm_links}.\n" if crm_links else "")
+        + (f"Partners: {partner_links}." if partner_links else "")
     )
 
     # 4. R&D & AI
