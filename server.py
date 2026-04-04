@@ -1171,7 +1171,6 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
     return "\n\n".join([header, s1, s2, s3, s4, s5a, s5b])
 
 
-@mcp.tool()
 def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
     """
     Full status update for the Continuous Services team (department 18).
@@ -1582,8 +1581,9 @@ def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
         return {'error': f'Error fetching team status: {str(e)}'}
 
 
-# Keep a direct callable reference before FastMCP wraps it as a FunctionTool
+# Save raw callable BEFORE FastMCP wraps it as a FunctionTool
 team_status_fn = get_team_status
+mcp.tool()(get_team_status)
 
 
 @mcp.tool()
