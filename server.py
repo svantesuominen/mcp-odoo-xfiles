@@ -691,6 +691,10 @@ def get_team_hours(days: int = 7) -> Dict[str, Any]:
     Use this when asked about team workload, customer vs internal hours,
     billable hours, individual utilisation, or missing timesheets.
 
+    customer_hours = billable lines (Billed on Timesheets, Billed at Fixed Price,
+                                     Billed Manually). internal_hours = Non Billable.
+    This matches Odoo's own billing type classification on each timesheet line.
+
     Returns keys:
         days, start_date, total_hours, customer_hours, internal_hours,
         by_employee (list with employee_id, employee_name, total_hours,
@@ -711,18 +715,10 @@ def get_team_hours(days: int = 7) -> Dict[str, Any]:
         ts_lines = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'account.analytic.line', 'search_read',
             [ts_domain],
-            {'fields': ['unit_amount', 'project_id', 'employee_id'], 'limit': 5000})
+            {'fields': ['unit_amount', 'project_id', 'employee_id',
+                        'timesheet_invoice_type'], 'limit': 5000})
 
-        # Step 2: Resolve which projects have a customer (single bulk read)
-        all_proj_ids = list({line['project_id'][0] for line in ts_lines if line.get('project_id')})
-        customer_project_ids: set = set()
-        if all_proj_ids:
-            proj_records = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
-                'project.project', 'read',
-                [all_proj_ids], {'fields': ['id', 'partner_id']})
-            customer_project_ids = {p['id'] for p in proj_records if p.get('partner_id')}
-
-        # Step 3: Collect all dept 18 employees (even those with no entries)
+        # Step 2: Collect all dept 18 employees (even those with no entries)
         employees = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'hr.employee', 'search_read',
             [[('department_id', '=', 18)]],
@@ -733,7 +729,10 @@ def get_team_hours(days: int = 7) -> Dict[str, Any]:
             for e in employees
         }
 
-        # Step 4: Aggregate by employee
+        # Step 3b (continued): Aggregate by employee
+        # customer_hours = billable lines (billable_time, billable_fixed, billable_manual)
+        # internal_hours = non_billable lines
+        BILLABLE_TYPES = {'billable_time', 'billable_fixed', 'billable_manual', 'billable_milestones'}
         for line in ts_lines:
             if not line.get('employee_id'):
                 continue
@@ -743,8 +742,7 @@ def get_team_hours(days: int = 7) -> Dict[str, Any]:
                 emp_data[eid] = {'employee_name': ename, 'total_hours': 0.0,
                                  'customer_hours': 0.0, 'internal_hours': 0.0}
             emp_data[eid]['total_hours'] = round(emp_data[eid]['total_hours'] + hours, 2)
-            pid = line['project_id'][0] if line.get('project_id') else None
-            if pid and pid in customer_project_ids:
+            if line.get('timesheet_invoice_type') in BILLABLE_TYPES:
                 emp_data[eid]['customer_hours'] = round(emp_data[eid]['customer_hours'] + hours, 2)
             else:
                 emp_data[eid]['internal_hours'] = round(emp_data[eid]['internal_hours'] + hours, 2)
@@ -1105,10 +1103,14 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
 
     Section writing guide:
     - Customer Service: highlight new_tickets, resolved_tickets, open_tickets; name top issues.
+      Render each ticket name as a markdown link using its url field.
     - Tech Maintenance: highlight total_hours, customer_pct, flag missing_hours > 2; note backlog size.
     - Key Account Management: highlight crm_count + partner_count touchpoints; name top leads/accounts.
+      Render each lead_name and partner_name as a markdown link using its url field.
     - R&D & AI: highlight logged_hours, project names, count of open tasks.
+      Render each task name as a markdown link using its url field.
     If a section has zero data, say so briefly (1 sentence).
+    ALWAYS render names as markdown links [name](url) when a url field is present.
     """
     try:
         uid, models = get_odoo_connection()
@@ -1188,10 +1190,12 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
         # ── Section 3: Key Account Management (Activities) ──────────────
         act_data = get_department_activities(days)
         top_crm = [{'lead_name': a['lead_name'], 'author': a['author'],
-                     'activity_type': a['activity_type'], 'date': a['date']}
+                     'activity_type': a['activity_type'], 'date': a['date'],
+                     'url': a.get('url', '')}
                    for a in (act_data.get('crm_activities') or [])[:5]]
         top_partners = [{'partner_name': a['partner_name'], 'author': a['author'],
-                          'activity_type': a['activity_type'], 'date': a['date']}
+                          'activity_type': a['activity_type'], 'date': a['date'],
+                          'url': a.get('url', '')}
                         for a in (act_data.get('partner_activities') or [])[:5]]
         key_account_management = {
             'crm_count': act_data.get('crm_count', 0),
@@ -1222,10 +1226,11 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
             [[('project_id.name', 'ilike', 'r&d'),
               ('stage_id.name', 'not ilike', 'done'),
               ('stage_id.name', 'not ilike', 'cancel')]],
-            {'fields': ['name', 'stage_id', 'allocated_hours'], 'limit': 5})
+            {'fields': ['id', 'name', 'stage_id', 'allocated_hours'], 'limit': 5})
         top_rd_tasks = [{'name': t['name'],
                           'stage': t['stage_id'][1] if t.get('stage_id') else '',
-                          'allocated_hours': t.get('allocated_hours') or 0.0}
+                          'allocated_hours': t.get('allocated_hours') or 0.0,
+                          'url': f"{base_url}/web#id={t['id']}&model=project.task&view_type=form"}
                         for t in top_rd_tasks_raw]
         rd_and_ai = {
             'logged_hours': rd_logged,
