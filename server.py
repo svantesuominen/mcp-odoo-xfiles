@@ -1162,7 +1162,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
         for p in dw['by_person_done']
     )
     s5a = (
-        f"*5a. Development Work — Done*\n"
+        f"*5. Development Work Done*\n"
         f"{dw['total_hours']} h total, {dw['customer_hours']} h customer "
         f"({dw['customer_pct']} %), est. income {dw['total_estimated_income']:.0f} €.\n"
         f"{done_list}."
@@ -1175,7 +1175,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
         for p in dw['by_person']
     )
     s5b = (
-        f"*5b. Development Work — To Be Done*\n"
+        f"*6. Development Work Todo*\n"
         f"{dw['backlog_remaining_hours']} h remaining, "
         f"{bl.get('total', 0)} tasks "
         f"({bl.get('backlog', 0)} backlog / {bl.get('in_progress', 0)} in progress / "
