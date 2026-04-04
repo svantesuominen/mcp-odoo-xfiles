@@ -1106,8 +1106,9 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
     - Tech Maintenance: highlight total_hours, customer_pct, flag missing_hours > 2; note backlog size.
     - Key Account Management: highlight crm_count + partner_count touchpoints; name top leads/accounts.
       Render each lead_name and partner_name as a markdown link using its url field.
-    - R&D & AI: highlight logged_hours, project names, count of open tasks.
-      Render each task name as a markdown link using its url field.
+    - R&D & AI: highlight logged_hours, project names, and worked_tasks (tasks
+      that had hours logged in the period). Render each task name as a markdown
+      link using its url field. Include logged_hours per task.
     If a section has zero data, say so briefly (1 sentence).
     ALWAYS render names as markdown links [name](url) when a url field is present.
     """
@@ -1207,36 +1208,42 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
         rd_lines = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
             'account.analytic.line', 'search_read',
             [[('project_id.name', 'ilike', 'r&d'), ('date', '>=', start_d)]],
-            {'fields': ['unit_amount', 'project_id'], 'limit': 2000})
+            {'fields': ['unit_amount', 'project_id', 'task_id'], 'limit': 2000})
+
         rd_by_proj: Dict[str, float] = {}
+        rd_hours_by_task: Dict[int, float] = {}
         for line in rd_lines:
             if line.get('project_id'):
                 pname = line['project_id'][1]
                 rd_by_proj[pname] = round(rd_by_proj.get(pname, 0.0) + line['unit_amount'], 2)
+            if line.get('task_id'):
+                tid = line['task_id'][0]
+                rd_hours_by_task[tid] = round(rd_hours_by_task.get(tid, 0.0) + line['unit_amount'], 2)
         rd_logged = round(sum(rd_by_proj.values()), 2)
 
-        rd_task_count = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
-            'project.task', 'search_count',
-            [[('project_id.name', 'ilike', 'r&d'),
-              ('stage_id.name', 'not ilike', 'done'),
-              ('stage_id.name', 'not ilike', 'cancel')]])
-        top_rd_tasks_raw = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
-            'project.task', 'search_read',
-            [[('project_id.name', 'ilike', 'r&d'),
-              ('stage_id.name', 'not ilike', 'done'),
-              ('stage_id.name', 'not ilike', 'cancel')]],
-            {'fields': ['id', 'name', 'stage_id', 'allocated_hours'], 'limit': 5})
-        top_rd_tasks = [{'name': t['name'],
-                          'stage': t['stage_id'][1] if t.get('stage_id') else '',
-                          'allocated_hours': t.get('allocated_hours') or 0.0,
-                          'url': f"{base_url}/web#id={t['id']}&model=project.task&view_type=form"}
-                        for t in top_rd_tasks_raw]
+        # Only show tasks that had hours logged in this period
+        worked_task_ids = list(rd_hours_by_task.keys())
+        top_rd_tasks = []
+        if worked_task_ids:
+            top_rd_tasks_raw = models.execute_kw(ODOO_DB, uid, ODOO_PASSWORD,
+                'project.task', 'read',
+                [worked_task_ids],
+                {'fields': ['id', 'name', 'stage_id', 'allocated_hours']})
+            top_rd_tasks = sorted([
+                {'name': t['name'],
+                 'stage': t['stage_id'][1] if t.get('stage_id') else '',
+                 'logged_hours': rd_hours_by_task.get(t['id'], 0.0),
+                 'allocated_hours': t.get('allocated_hours') or 0.0,
+                 'url': f"{base_url}/web#id={t['id']}&model=project.task&view_type=form"}
+                for t in top_rd_tasks_raw
+            ], key=lambda x: x['logged_hours'], reverse=True)
+
         rd_and_ai = {
             'logged_hours': rd_logged,
             'projects': [{'project_name': k, 'logged_hours': v}
                          for k, v in sorted(rd_by_proj.items(), key=lambda x: -x[1])],
-            'open_tasks': rd_task_count,
-            'top_open_tasks': top_rd_tasks,
+            'worked_tasks_count': len(worked_task_ids),
+            'worked_tasks': top_rd_tasks,
         }
 
         return {
