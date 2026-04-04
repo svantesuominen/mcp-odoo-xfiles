@@ -1118,11 +1118,11 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
 
     # 3. Key Account Management
     crm_links = ", ".join(
-        _sl(a['url'], a['lead_name']) + f" ({a['date'][:10]})"
+        _sl(a['url'], a['lead_name'])
         for a in kam['top_crm'][:5]
     )
     partner_links = ", ".join(
-        _sl(a['url'], a['partner_name']) + f" ({a['date'][:10]})"
+        _sl(a['url'], a['partner_name'])
         for a in kam['top_partners'][:5]
     )
     s3 = (
