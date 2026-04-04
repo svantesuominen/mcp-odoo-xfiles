@@ -1,6 +1,9 @@
 # Secrets
 .env
 
+# Editor config (local only)
+.cursor/
+
 # Python
 __pycache__/
 *.py[cod]
