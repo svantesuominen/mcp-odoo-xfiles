@@ -1122,7 +1122,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url,
             conn_ago = f"{conn_days // 30} month{'s' if conn_days // 30 > 1 else ''} ago"
         else:
             conn_ago = f"{conn_days} day{'s' if conn_days != 1 else ''} ago"
-        conn_str = f"{_sl(conn['url'], 'last connectivity issue')} ({conn_ago})"
+        conn_str = f"The last reported connectivity issue was {conn_ago} ({_sl(conn['url'], conn['name'])})."
     else:
         conn_str = "no connectivity tickets"
     top_infra = sorted(tm.get('infra_tasks', []),
@@ -1135,7 +1135,7 @@ def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url,
     s2 = (
         f"*2. Tech Maintenance*\n"
         f"*Logged {tm['total_hours']} h* ({emp_str}).\n"
-        f"{conn_str}. Infra tasks open: {tm['infra_task_count']} ({round(tm['infra_total_hours'])} h)."
+        f"{conn_str} Infra tasks open: {tm['infra_task_count']} ({round(tm['infra_total_hours'])} h)."
         + (f"\nTop timesheet tasks: {top_ts_links}." if top_ts_links else "")
         + (f"\nBiggest tasks open: {infra_links}." if infra_links else "")
     )
