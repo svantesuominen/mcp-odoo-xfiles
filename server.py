@@ -1077,8 +1077,102 @@ def get_department_activities(days: int = 7) -> Dict[str, Any]:
         return {'error': f'Error fetching department activities: {str(e)}'}
 
 
+def _format_team_status(cs, tm, kam, rd, dw, period_label, base_url) -> str:
+    """Format team status data as a Slack-ready string (uses <url|text> link syntax)."""
+
+    def _sl(url, text):
+        """Slack link helper."""
+        return f"<{url}|{text}>" if url else text
+
+    header = f"*Continuous Services {period_label} update*"
+
+    # 1. Customer Service
+    top = ", ".join(
+        f"{_sl(t['url'], t['name'])} ({t['customer']})" if t.get('customer')
+        else _sl(t['url'], t['name'])
+        for t in cs['top_tickets'][:3]
+    )
+    s1 = (
+        f"*1. Customer Service*\n"
+        f"{cs['new_tickets']} new tickets, {cs['resolved_tickets']} resolved. "
+        f"Open: {cs['open_new']} new / {cs['open_message']} awaiting msg / "
+        f"{cs['open_in_progress']} in progress ({cs['open_tickets']} total). "
+        f"Recent: {top}."
+    )
+
+    # 2. Tech Maintenance
+    emp_str = ", ".join(
+        f"{e['name']} {e['total_hours']} h" for e in tm['by_employee']
+    )
+    conn = tm.get('last_connectivity_ticket')
+    conn_str = (
+        f"{_sl(conn['url'], conn['name'])} ({conn['date']})" if conn
+        else "no connectivity tickets"
+    )
+    s2 = (
+        f"*2. Tech Maintenance*\n"
+        f"Logged {tm['total_hours']} h ({emp_str}). "
+        f"Connectivity tickets total: {tm['connectivity_count']}, last: {conn_str}. "
+        f"Infra tasks open: {tm['infra_task_count']} ({tm['infra_total_hours']} h allocated)."
+    )
+
+    # 3. Key Account Management
+    crm_links = ", ".join(
+        _sl(a['url'], a['lead_name']) + f" ({a['date'][:10]})"
+        for a in kam['top_crm'][:3]
+    )
+    s3 = (
+        f"*3. Key Account Management*\n"
+        f"Team had {kam['crm_count']} CRM activities and "
+        f"{kam['partner_count']} partner activities. "
+        + (f"Top leads: {crm_links}." if crm_links else "No CRM activities this period.")
+    )
+
+    # 4. R&D & AI
+    task_links = ", ".join(
+        f"{_sl(t['url'], t['name'])} {t['logged_hours']} h"
+        for t in rd['worked_tasks'][:3]
+    )
+    s4 = (
+        f"*4. R&D & AI*\n"
+        f"Logged {rd['logged_hours']} h across {rd['worked_tasks_count']} tasks. "
+        + (f"Top: {task_links}." if task_links else "No R&D hours this period.")
+    )
+
+    # 5a. Development Work Done
+    done_list = "; ".join(
+        f"{p['name']}: ({p['total_hours']} h, "
+        f"{round(p['customer_hours'] / p['total_hours'] * 100) if p['total_hours'] else 0} %, "
+        f"{p['estimated_income']:.0f} €)"
+        for p in dw['by_person_done']
+    )
+    s5a = (
+        f"*5a. Development Work — Done*\n"
+        f"{dw['total_hours']} h total, {dw['customer_hours']} h customer "
+        f"({dw['customer_pct']} %), est. income {dw['total_estimated_income']:.0f} €. "
+        f"{done_list}."
+    )
+
+    # 5b. Development Work To Be Done
+    bl = dw['backlog_by_stage']
+    people_str = "; ".join(
+        f"{p['name']} ({round(p['days_of_work'])} days)"
+        for p in dw['by_person']
+    )
+    s5b = (
+        f"*5b. Development Work — To Be Done*\n"
+        f"{dw['backlog_remaining_hours']} h remaining, "
+        f"{bl.get('total', 0)} tasks "
+        f"({bl.get('backlog', 0)} backlog / {bl.get('in_progress', 0)} in progress / "
+        f"{bl.get('acceptance', 0)} acceptance / {bl.get('ready_for_production', 0)} ready). "
+        f"{people_str}."
+    )
+
+    return "\n\n".join([header, s1, s2, s3, s4, s5a, s5b])
+
+
 @mcp.tool()
-def get_team_status(period: str = "7d") -> Dict[str, Any]:
+def get_team_status(period: str = "7d", format: str = "json") -> Dict[str, Any]:
     """
     Full status update for the Continuous Services team (department 18).
     Covers five operational areas: customer service, tech maintenance,
@@ -1468,6 +1562,11 @@ def get_team_status(period: str = "7d") -> Dict[str, Any]:
             'backlog_remaining_hours': backlog_remaining_hours,
             'by_person': by_person,
         }
+
+        if format == "slack":
+            return _format_team_status(
+                customer_service, tech_maintenance, key_account_management,
+                rd_and_ai, development_work, period_label, base_url)
 
         return {
             'period': period,
