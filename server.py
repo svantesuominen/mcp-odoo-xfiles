@@ -1,5 +1,4 @@
 import os
-import xmlrpc.client
 from typing import List, Dict, Any, Union
 from fastmcp import FastMCP
 from dotenv import load_dotenv
@@ -9,14 +8,17 @@ from datetime import datetime, timedelta
 import time
 from starlette.responses import JSONResponse
 
-# Load environment variables
+from odoo_connection import (
+    ODOO_URL,
+    ODOO_DB,
+    ODOO_USERNAME,
+    ODOO_PASSWORD,
+    get_odoo_connection,
+)
+
+# Load environment variables (redundant if odoo_connection imported first; safe for GITHUB_TOKEN etc.)
 load_dotenv()
 
-# Configuration
-ODOO_URL = os.getenv("ODOO_URL")
-ODOO_DB = os.getenv("ODOO_DB")
-ODOO_USERNAME = os.getenv("ODOO_USERNAME")
-ODOO_PASSWORD = os.getenv("ODOO_PASSWORD") or os.getenv("ODOO_API_KEY")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 
 HELPDESK_TEAM_ID = 2
@@ -32,7 +34,6 @@ SERVER_START_TIME = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 # Initialize MCP
 mcp = FastMCP("Odoo Helpdesk Agent")
 
-_odoo_cache: Dict[str, Any] = {"uid": None, "models": None}
 
 def _parse_period(period: str):
     """
@@ -45,25 +46,6 @@ def _parse_period(period: str):
     start_d  = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     return start_dt, start_d, days, label
 
-def get_odoo_connection():
-    if not all([ODOO_URL, ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD]):
-        raise ValueError("Missing Odoo credentials in environment variables")
-
-    if _odoo_cache["uid"] and _odoo_cache["models"]:
-        return _odoo_cache["uid"], _odoo_cache["models"]
-
-    url = ODOO_URL.rstrip('/')
-    common = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/common")
-    try:
-        uid = common.authenticate(ODOO_DB, ODOO_USERNAME, ODOO_PASSWORD, {})
-        if not uid:
-            raise PermissionError("Authentication failed. Please check your credentials.")
-        models = xmlrpc.client.ServerProxy(f"{url}/xmlrpc/2/object")
-        _odoo_cache["uid"] = uid
-        _odoo_cache["models"] = models
-        return uid, models
-    except Exception as e:
-        raise ConnectionError(f"Failed to connect to Odoo: {str(e)}")
 
 @mcp.tool()
 def search_similar_tickets(query: str, limit: int = 5) -> List[Dict[str, Any]]:
