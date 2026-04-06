@@ -14,6 +14,8 @@ from sales_mcp.odoo_sales import (
     lead_form_url,
     log_activity_on_record,
     partner_form_url,
+    read_opportunity_company_partner_id,
+    read_partner_display_name,
     resolve_salesperson_user_id,
     search_leads,
     search_partners_company_normalized,
@@ -29,6 +31,11 @@ SERVER_START_TIME = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 mcp = FastMCP("Odoo Sales Capture")
 
 _OCCURRED_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_FINNISH_DMY = re.compile(
+    r"(?:Vastattu|Soitettu|Puhelu(?:lla)?|Tapaamis(?:ta)?|Pvm|Aika)\s*[:.]?\s*"
+    r"(\d{1,2})\.(\d{1,2})\.(\d{2,4})",
+    re.IGNORECASE,
+)
 
 
 def _validate_occurred_on(value: Optional[str]) -> str:
@@ -38,6 +45,36 @@ def _validate_occurred_on(value: Optional[str]) -> str:
     if not _OCCURRED_RE.match(s):
         raise ValueError(f"occurred_on must be YYYY-MM-DD, got: {value!r}")
     return s
+
+
+def _infer_occurred_on_from_paste(body: str) -> Optional[str]:
+    """Parse Finnish d.m.yyyy after common keywords, or first ISO date in the paste."""
+    m = _FINNISH_DMY.search(body)
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if y < 100:
+            y += 2000
+        try:
+            return datetime(y, mo, d).date().isoformat()
+        except ValueError:
+            pass
+    m2 = re.search(r"\b(\d{4})-(\d{2})-(\d{2})\b", body)
+    if m2:
+        y, mo, d = int(m2.group(1)), int(m2.group(2)), int(m2.group(3))
+        try:
+            return datetime(y, mo, d).date().isoformat()
+        except ValueError:
+            pass
+    return None
+
+
+def _resolve_occurred_on(occurred_on_param: Optional[str], body: str) -> str:
+    if occurred_on_param and str(occurred_on_param).strip():
+        return _validate_occurred_on(occurred_on_param)
+    inferred = _infer_occurred_on_from_paste(body)
+    if inferred:
+        return inferred
+    return _validate_occurred_on(None)
 
 
 @mcp.tool()
@@ -88,12 +125,18 @@ def log_note(
     **Only call after the user confirmed** the company (`partner_id`) or opportunity
     (`opportunity_id`) from `search_partner` / `search_lead`.
 
-    **interaction_type:** `call` (default) or `meeting` — maps to Odoo activity types
-    (names configurable via `ODOO_CALL_ACTIVITY_TYPE_NAME` / `ODOO_MEETING_ACTIVITY_TYPE_NAME`).
+    **interaction_type:** `call` (default) or `meeting` — maps to Odoo `mail.activity.type`
+    names (`ODOO_CALL_ACTIVITY_TYPE_NAME` / `ODOO_MEETING_ACTIVITY_TYPE_NAME`, default Call/Meeting).
+    Completing the activity produces the normal **Call done** / activity chatter line.
 
-    **occurred_on:** `YYYY-MM-DD` when the call/meeting happened; omit to use today
-    (Europe/Helsinki via `ODOO_SALES_DATE_TZ`). Parse Finnish `Vastattu` / `Soitettu` lines
-    in the paste and pass the date here.
+    **occurred_on:** `YYYY-MM-DD` when the call/meeting happened (strongly preferred whenever
+    the user or paste mentions a date). If omitted, the server tries Finnish lines such as
+    `Vastattu 15.3.2026` / `Soitettu: 15.03.2026` or the first `YYYY-MM-DD` in the body;
+    otherwise it uses today (`ODOO_SALES_DATE_TZ`).
+
+    **After success:** Always tell the user the result and include a markdown link using
+    `partner_name` and `partner_url` when present (e.g. `[Acme Oy](partner_url)`), plus
+    `url` for the lead when `target` is `opportunity`.
 
     **partner_id** must be the **company** id returned by `search_partner`, not a child contact.
     """
@@ -107,7 +150,7 @@ def log_note(
         if not body.strip():
             return {"error": "Note body is empty after parsing footer and disclaimer strip."}
 
-        deadline = _validate_occurred_on(occurred_on)
+        deadline = _resolve_occurred_on(occurred_on, body)
         user_id = resolve_salesperson_user_id(salesperson_email)
 
         if target == "partner":
@@ -120,7 +163,7 @@ def log_note(
                 return {
                     "error": "Do not pass opportunity_id when footer is + add to partner."
                 }
-            log_activity_on_record(
+            log_meta = log_activity_on_record(
                 "res.partner",
                 int(partner_id),
                 it,
@@ -128,13 +171,20 @@ def log_note(
                 body,
                 deadline,
             )
+            pid = int(partner_id)
+            purl = partner_form_url(pid)
+            pname = read_partner_display_name(pid)
             return {
                 "ok": True,
                 "target": "partner",
                 "partner_id": partner_id,
-                "url": partner_form_url(int(partner_id)),
+                "partner_name": pname,
+                "url": purl,
+                "partner_url": purl,
                 "interaction_type": it,
                 "occurred_on": deadline,
+                "message_id": log_meta.get("message_id"),
+                "chatter_date_backdated": log_meta.get("chatter_date_backdated"),
             }
 
         if partner_id is not None:
@@ -144,22 +194,31 @@ def log_note(
                 "error": "Footer is + add to opportunity but opportunity_id is missing. "
                 "Search with search_lead, confirm, then pass opportunity_id."
             }
-        log_activity_on_record(
+        oid = int(opportunity_id)
+        log_meta = log_activity_on_record(
             "crm.lead",
-            int(opportunity_id),
+            oid,
             it,
             user_id,
             body,
             deadline,
         )
-        return {
+        company_pid = read_opportunity_company_partner_id(oid)
+        out: Dict[str, Any] = {
             "ok": True,
             "target": "opportunity",
             "opportunity_id": opportunity_id,
-            "url": lead_form_url(int(opportunity_id)),
+            "url": lead_form_url(oid),
             "interaction_type": it,
             "occurred_on": deadline,
+            "message_id": log_meta.get("message_id"),
+            "chatter_date_backdated": log_meta.get("chatter_date_backdated"),
         }
+        if company_pid is not None:
+            out["partner_id"] = company_pid
+            out["partner_url"] = partner_form_url(company_pid)
+            out["partner_name"] = read_partner_display_name(company_pid)
+        return out
     except ValueError as e:
         return {"error": str(e)}
     except Exception as e:

@@ -1,15 +1,19 @@
 """Odoo XML-RPC helpers for Sales MCP: users, partners, activities."""
 
 import html
+import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, time
+from html.parser import HTMLParser
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
 from odoo_connection import ODOO_DB, ODOO_PASSWORD, ODOO_URL, get_odoo_connection
 
-# Default activity type names (override via env)
+_logger = logging.getLogger(__name__)
+
+# Default activity type names (override via env) — must match Odoo mail.activity.type
 _CALL_TYPE_NAME = os.getenv("ODOO_CALL_ACTIVITY_TYPE_NAME") or "Call"
 _MEETING_TYPE_NAME = os.getenv("ODOO_MEETING_ACTIVITY_TYPE_NAME") or "Meeting"
 
@@ -21,27 +25,6 @@ _ir_model_id_cache: Dict[str, int] = {}
 
 def today_yyyy_mm_dd() -> str:
     return datetime.now(_TZ).date().isoformat()
-
-
-def resolve_salesperson_user_id(salesperson_email: str) -> int:
-    email = (salesperson_email or "").strip().lower()
-    if not email:
-        raise ValueError("salesperson_email is required.")
-    uid, models = get_odoo_connection()
-    found = models.execute_kw(
-        ODOO_DB,
-        uid,
-        ODOO_PASSWORD,
-        "res.users",
-        "search_read",
-        [[("login", "ilike", email), ("active", "=", True)]],
-        {"fields": ["id"], "limit": 2},
-    )
-    if not found:
-        raise ValueError(f"No active Odoo user found for login/email: {salesperson_email!r}")
-    if len(found) > 1:
-        raise ValueError(f"Multiple Odoo users match email: {salesperson_email!r}")
-    return found[0]["id"]
 
 
 def ir_model_id_for(model_name: str) -> int:
@@ -87,9 +70,46 @@ def activity_type_id_for(interaction_type: str) -> int:
     return tid
 
 
+def resolve_salesperson_user_id(salesperson_email: str) -> int:
+    email = (salesperson_email or "").strip().lower()
+    if not email:
+        raise ValueError("salesperson_email is required.")
+    uid, models = get_odoo_connection()
+    found = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "res.users",
+        "search_read",
+        [[("login", "ilike", email), ("active", "=", True)]],
+        {"fields": ["id"], "limit": 2},
+    )
+    if not found:
+        raise ValueError(f"No active Odoo user found for login/email: {salesperson_email!r}")
+    if len(found) > 1:
+        raise ValueError(f"Multiple Odoo users match email: {salesperson_email!r}")
+    return found[0]["id"]
+
+
 def partner_form_url(partner_id: int) -> str:
     base = ODOO_URL.rstrip("/")
     return f"{base}/web#id={partner_id}&model=res.partner&view_type=form"
+
+
+def read_partner_display_name(partner_id: int) -> str:
+    uid, models = get_odoo_connection()
+    rows = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "res.partner",
+        "read",
+        [[partner_id]],
+        {"fields": ["name"]},
+    )
+    if not rows:
+        return ""
+    return (rows[0].get("name") or "").strip()
 
 
 def lead_form_url(lead_id: int) -> str:
@@ -223,6 +243,42 @@ def search_leads(query: str, limit: int = 15) -> List[Dict[str, Any]]:
     return out
 
 
+def read_opportunity_company_partner_id(opportunity_id: int) -> Optional[int]:
+    """
+    Company partner id for linking (matches search_partner: commercial entity).
+    Returns None if the lead has no customer set.
+    """
+    uid, models = get_odoo_connection()
+    rows = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "crm.lead",
+        "read",
+        [[opportunity_id]],
+        {"fields": ["partner_id"]},
+    )
+    if not rows:
+        return None
+    p = rows[0].get("partner_id")
+    if not p:
+        return None
+    contact_or_company_id = int(p[0])
+    partners = models.execute_kw(
+        ODOO_DB,
+        uid,
+        ODOO_PASSWORD,
+        "res.partner",
+        "read",
+        [[contact_or_company_id]],
+        {"fields": ["commercial_partner_id"]},
+    )
+    if not partners:
+        return contact_or_company_id
+    cp = partners[0].get("commercial_partner_id")
+    return int(cp[0]) if cp else contact_or_company_id
+
+
 _DISCLAIMER_START = re.compile(
     r"(?ms)^\s*(Tiivistelmä luotu|Summary created).*$",
     re.IGNORECASE,
@@ -237,11 +293,65 @@ def strip_trailing_disclaimer(body: str) -> str:
     return body
 
 
+class _HTMLToText(HTMLParser):
+    """Minimal HTML → text (newlines around block-ish tags) without extra deps."""
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self._chunks: List[str] = []
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        if tag in ("br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4"):
+            self._chunks.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("p", "div", "li", "tr", "h1", "h2", "h3", "h4", "table", "ul", "ol"):
+            self._chunks.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        self._chunks.append(data)
+
+    def text(self) -> str:
+        return "".join(self._chunks)
+
+
+def _paste_body_to_plain_text(body: str) -> str:
+    """
+    Turn pasted note into plain text. Strips HTML tags (model output often includes
+    <p>, <br>) so we do not double-wrap escaped tags in chatter.
+    """
+    raw = (body or "").strip()
+    if not raw:
+        return ""
+    if "<" in raw and ">" in raw:
+        parser = _HTMLToText()
+        parser.feed(raw)
+        parser.close()
+        text = parser.text()
+    else:
+        text = raw
+    text = html.unescape(text)
+    lines = [ln.rstrip() for ln in text.splitlines()]
+    out = "\n".join(lines).strip()
+    return out
+
+
 def _body_to_html_feedback(body: str) -> str:
-    safe = html.escape(body.strip())
+    plain = _paste_body_to_plain_text(body)
+    if not plain:
+        return "<p></p>"
+    safe = html.escape(plain)
     parts = safe.split("\n\n")
     paras = "".join(f"<p>{p.replace(chr(10), '<br/>')}</p>" for p in parts if p.strip())
     return paras or "<p></p>"
+
+
+def _odoo_datetime_utc_for_occurred_on(occurred_on: str) -> str:
+    """Noon in ODOO_SALES_DATE_TZ as naive UTC string for Odoo mail.message.date."""
+    d = datetime.strptime(occurred_on, "%Y-%m-%d").date()
+    local_noon = datetime.combine(d, time(12, 0), tzinfo=_TZ)
+    utc = local_noon.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+    return utc.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def log_activity_on_record(
@@ -253,8 +363,8 @@ def log_activity_on_record(
     occurred_on: Optional[str],
 ) -> Dict[str, Any]:
     """
-    Create a mail.activity and immediately complete it via action_feedback
-    so chatter shows a done Call/Meeting with notes.
+    Create a mail.activity and complete it via action_feedback (standard “Call done” chatter).
+    Optionally rewrites the posted mail.message ``date`` to occurred_on (best-effort; needs ACL).
     """
     uid, models = get_odoo_connection()
     type_id = activity_type_id_for(interaction_type)
@@ -279,7 +389,7 @@ def log_activity_on_record(
         [act_vals],
     )
     feedback_html = _body_to_html_feedback(note_body)
-    models.execute_kw(
+    msg_id = models.execute_kw(
         ODOO_DB,
         uid,
         ODOO_PASSWORD,
@@ -288,4 +398,31 @@ def log_activity_on_record(
         [[act_id]],
         {"feedback": feedback_html},
     )
-    return {"activity_id": act_id, "res_model": res_model, "res_id": res_id}
+
+    chatter_date_backdated = False
+    if msg_id:
+        date_utc = _odoo_datetime_utc_for_occurred_on(deadline)
+        try:
+            models.execute_kw(
+                ODOO_DB,
+                uid,
+                ODOO_PASSWORD,
+                "mail.message",
+                "write",
+                [[msg_id], {"date": date_utc}],
+            )
+            chatter_date_backdated = True
+        except Exception as e:
+            _logger.warning(
+                "Could not backdate mail.message %s to %s: %s",
+                msg_id,
+                date_utc,
+                e,
+            )
+
+    return {
+        "message_id": msg_id,
+        "chatter_date_backdated": chatter_date_backdated,
+        "res_model": res_model,
+        "res_id": res_id,
+    }
