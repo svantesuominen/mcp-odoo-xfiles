@@ -15,6 +15,7 @@ from odoo_connection import (
     ODOO_PASSWORD,
     get_odoo_connection,
 )
+from client_summary import build_client_summary, resolve_partners_by_name
 
 # Load environment variables (redundant if odoo_connection imported first; safe for GITHUB_TOKEN etc.)
 load_dotenv()
@@ -1778,6 +1779,56 @@ def get_sales_activity(period: str = "7d") -> Dict[str, Any]:
         }
     except Exception as e:
         return {'error': f'Error fetching sales activity: {str(e)}'}
+
+
+@mcp.tool()
+def get_client_summary(client_name: str, years_back: int = 5) -> Dict[str, Any]:
+    """
+    Full client dossier for one company by name (commercial partner).
+
+    Resolves the company from `res.partner` (includes address / `location_display`),
+    then aggregates:
+    - CRM opportunities and opportunity chatter (mail.message on crm.lead)
+    - First won non-subscription sale.order (notes, line descriptions, totals)
+    - Active subscription sale.orders (is_subscription, in progress / paused;
+      includes main_modules, software, main_integrations, internal_note, user_partner)
+    - Delivery projects: customer timesheet hours (so_line set), top tasks, hours by employee
+    - Helpdesk tickets (team 2): counts, tags, recent tickets
+
+    Args:
+        client_name: Company or contact name to search (ilike).
+        years_back: How many years of tickets/timesheets to include (default 5).
+
+    If multiple companies match, returns `ambiguous: true` and `matches` — ask the user
+    which `partner_id` to use, then call again with an exact name or disambiguate.
+
+    Use with the client-summary Cursor skill to render the six-section report and
+    development suggestions. Always include `partner_url` and other `url` fields as
+    markdown links in your reply.
+    """
+    try:
+        matches = resolve_partners_by_name(client_name, limit=10)
+        if not matches:
+            return {
+                "error": f"No company found matching {client_name!r}.",
+                "matches": [],
+            }
+        if len(matches) > 1:
+            exact = [m for m in matches if m["name"].lower() == client_name.strip().lower()]
+            if len(exact) == 1:
+                matches = exact
+            else:
+                return {
+                    "ambiguous": True,
+                    "message": "Multiple companies match; ask the user which partner_id to use.",
+                    "matches": matches,
+                }
+        partner_id = int(matches[0]["partner_id"])
+        summary = build_client_summary(partner_id, years_back=years_back)
+        summary["resolved_from"] = client_name
+        return summary
+    except Exception as e:
+        return {"error": f"Error building client summary: {str(e)}"}
 
 
 @mcp.custom_route("/", methods=["GET"])

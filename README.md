@@ -42,6 +42,7 @@ Continuous Services [weekly/monthly/quarterly] update (Mon 28.3. – Sun 3.4.):
 
 | Tool | Description |
 | :--- | :--- |
+| `get_client_summary(client_name, years_back)` | Full client dossier: CRM chatter, first sale, projects/hours, active subscription SOs, helpdesk — use with `.cursor/skills/client-summary`. |
 | `get_team_backlog()` | Full task backlog for dept 18, grouped by stage and assignee with weeks/months-to-clear estimates (6 h/day capacity). |
 | `get_rd_hours(months)` | Logged R&D timesheet hours by project/task + all open R&D tasks assigned to the team. |
 | `get_issues_analysis(months)` | Multi-month trend analysis: most common, most laborious, and highest-priority helpdesk issues. |
