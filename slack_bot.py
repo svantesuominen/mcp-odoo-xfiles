@@ -5,6 +5,7 @@ Slash commands:
   /weekly    → get_team_status(period="7d",  format="slack")
   /monthly   → get_team_status(period="1m",  format="slack")
   /quarterly → get_team_status(period="1q",  format="slack")
+  /coverage1 → get_coverage1 (team alias or person name)
 
 Uses Socket Mode — no public URL required.
 Set SLACK_BOT_TOKEN (xoxb-...) and SLACK_APP_TOKEN (xapp-...) in environment.
@@ -58,6 +59,39 @@ async def cmd_monthly(ack, say, body):
 @app.command("/quarterly")
 async def cmd_quarterly(ack, say, body):
     await _post_status(ack, say, body, "1q")
+
+
+@app.command("/coverage1")
+async def cmd_coverage1(ack, say, body):
+    channel = body.get("channel_name", "")
+    _logger.info("Slash command /coverage1 in channel: %r", channel)
+    if ALLOWED_CHANNEL and channel != ALLOWED_CHANNEL:
+        await ack(text=f"This command only works in #{ALLOWED_CHANNEL}. (you are in: #{channel})")
+        return
+    await ack()
+    try:
+        from coverage1 import resolve_slack_target, get_coverage1, format_coverage1_slack
+
+        text = (body.get("text") or "").strip()
+        target = resolve_slack_target(text)
+        if target.get("error") == "usage":
+            await say(target.get("message", "Usage: /coverage1 xfiles | devteam | Name"))
+            return
+        if target.get("ambiguous") or target.get("error"):
+            await say(format_coverage1_slack(target))
+            return
+        if target.get("mode") == "person":
+            result = get_coverage1(employee_id=target["employee_id"], format="slack")
+        else:
+            result = get_coverage1(
+                team_id=target["team_id"],
+                extra_user_ids=target.get("extra_user_ids"),
+                format="slack",
+            )
+        await say(result)
+    except Exception as e:
+        _logger.error("Error fetching coverage1: %s", e)
+        await say(f":warning: Could not fetch Coverage 1: {e}")
 
 
 async def main():

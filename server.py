@@ -16,6 +16,7 @@ from odoo_connection import (
     get_odoo_connection,
 )
 from client_summary import build_client_summary, resolve_partners_by_name
+from coverage1 import list_teams as _list_teams, get_coverage1 as _get_coverage1
 
 # Load environment variables (redundant if odoo_connection imported first; safe for GITHUB_TOKEN etc.)
 load_dotenv()
@@ -1829,6 +1830,63 @@ def get_client_summary(client_name: str, years_back: int = 5) -> Dict[str, Any]:
         return summary
     except Exception as e:
         return {"error": f"Error building client summary: {str(e)}"}
+
+
+def list_teams(name_filter: str = "") -> Dict[str, Any]:
+    """
+    List Odoo departments (teams) for Coverage 1 and workforce reporting.
+
+    Returns teams with id, name, member_count, member_names, plus known
+    short aliases (xfiles, devteam, pmteam, etc.).
+
+    Use before get_coverage1 when the user did not specify which team.
+    """
+    return _list_teams(name_filter)
+
+
+mcp.tool()(list_teams)
+
+
+def get_coverage1(
+    team_id: int = None,
+    team_name: str = None,
+    person_name: str = None,
+    extra_user_ids: List[int] = None,
+    months: int = 3,
+    format: str = "json",
+) -> Union[Dict[str, Any], str]:
+    """
+    Coverage 1: pipeline workload vs capacity for a team or one person.
+
+  Planned work = max(0, remaining_hours) on tasks in Backlog through Ready for
+  Production (incl. Code Review), split across assignees.
+
+  Velocity = avg hours per day on project-task timesheets over the previous
+  3 full calendar months (days with logged work).
+
+  Coverage % per month = min(100, workload / capacity); workload rolls forward
+  month to month (waterfall). Current month uses workdays from today.
+
+  Team aliases: xfiles (includes Jyri user 67), devteam, pmteam, ateam, mms.
+  Or pass person_name for an individual report.
+
+  format="slack" returns mrkdwn for the Slack bot; default is structured JSON.
+
+  Returns velocity_label and velocity_window per member; team_coverage for
+  3 months (current + 2 ahead) unless months is changed.
+    """
+    return _get_coverage1(
+        team_id=team_id,
+        team_name=team_name,
+        person_name=person_name,
+        extra_user_ids=extra_user_ids,
+        months=months,
+        format=format,
+    )
+
+
+coverage1_fn = get_coverage1
+mcp.tool()(get_coverage1)
 
 
 @mcp.custom_route("/", methods=["GET"])
