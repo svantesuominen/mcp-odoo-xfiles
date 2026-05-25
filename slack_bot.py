@@ -61,14 +61,8 @@ async def cmd_quarterly(ack, say, body):
     await _post_status(ack, say, body, "1q")
 
 
-@app.command("/coverage1")
-async def cmd_coverage1(ack, say, body):
-    channel = body.get("channel_name", "")
-    _logger.info("Slash command /coverage1 in channel: %r", channel)
-    if ALLOWED_CHANNEL and channel != ALLOWED_CHANNEL:
-        await ack(text=f"This command only works in #{ALLOWED_CHANNEL}. (you are in: #{channel})")
-        return
-    await ack()
+async def _post_coverage1(say, body: dict):
+    """Fetch Coverage 1 from Odoo and post (runs after immediate slash-command ack)."""
     try:
         from coverage1 import resolve_slack_target, get_coverage1, format_coverage1_slack
 
@@ -92,6 +86,17 @@ async def cmd_coverage1(ack, say, body):
     except Exception as e:
         _logger.error("Error fetching coverage1: %s", e)
         await say(f":warning: Could not fetch Coverage 1: {e}")
+
+
+@app.command("/coverage1")
+async def cmd_coverage1(ack, say, body):
+    channel = body.get("channel_name", "")
+    _logger.info("Slash command /coverage1 in channel: %r", channel)
+    if ALLOWED_CHANNEL and channel != ALLOWED_CHANNEL:
+        await ack(text=f"This command only works in #{ALLOWED_CHANNEL}. (you are in: #{channel})")
+        return
+    await ack(text="Computing Coverage 1…")
+    asyncio.create_task(_post_coverage1(say, body))
 
 
 async def main():

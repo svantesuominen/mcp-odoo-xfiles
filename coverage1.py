@@ -89,26 +89,73 @@ def _sum_capacity(month_rows: List[Dict[str, Any]]) -> float:
     return round(sum(r.get("capacity_hours") or 0 for r in month_rows), 1)
 
 
-def _format_month_coverage_bits(month_rows: List[Dict[str, Any]]) -> str:
-    """e.g. May 100% (120h avail), Jun 33% (85h avail)"""
-    parts = []
-    for row in month_rows:
-        cap = row.get("capacity_hours") or 0
-        parts.append(f"{row['month_label']} {row['coverage_pct']}% ({cap:.0f}h avail)")
-    return ", ".join(parts)
-
-
-def _format_planned_capacity_summary(planned: float, capacity: float) -> str:
-    return f"planned {planned:.0f} h · available {capacity:.0f} h (3 mo)"
-
-
 def _velocity_hpd(member: Dict[str, Any]) -> str:
-    return f"{member.get('progress_hours_per_day', 0):.1f} h/d"
+    return f"{member.get('progress_hours_per_day', 0):.1f}"
 
 
-def _format_team_velocity_roster(members: List[Dict[str, Any]]) -> str:
-    parts = [f"{m['name']} {_velocity_hpd(m)}" for m in members]
-    return "Velocities: " + ", ".join(parts)
+def _month_cell(month_row: Dict[str, Any]) -> str:
+    cap = month_row.get("capacity_hours") or 0
+    return f"{month_row.get('coverage_pct', 0)}% /{cap:.0f}h"
+
+
+def _slack_table(headers: List[str], rows: List[List[str]]) -> str:
+    """Monospace table for Slack code block."""
+    if not headers:
+        return ""
+    col_count = len(headers)
+    widths = [len(h) for h in headers]
+    for row in rows:
+        for i in range(col_count):
+            cell = row[i] if i < len(row) else ""
+            widths[i] = max(widths[i], len(cell))
+
+    def fmt_cell(i: int, cell: str) -> str:
+        if i == 0:
+            return cell.ljust(widths[i])
+        return cell.rjust(widths[i])
+
+    sep = "|-" + "-|-".join("-" * w for w in widths) + "-|"
+    out = [
+        "| " + " | ".join(fmt_cell(i, headers[i]) for i in range(col_count)) + " |",
+        sep,
+    ]
+    for row in rows:
+        cells = [row[i] if i < len(row) else "" for i in range(col_count)]
+        out.append("| " + " | ".join(fmt_cell(i, cells[i]) for i in range(col_count)) + " |")
+    return "\n".join(out)
+
+
+def _coverage_table_headers(month_labels: List[str]) -> List[str]:
+    return ["Name", "h/d"] + month_labels + ["Plan", "Avail"]
+
+
+def _member_table_row(m: Dict[str, Any], month_labels: List[str]) -> List[str]:
+    by_label = {r["month_label"]: _month_cell(r) for r in (m.get("months") or [])}
+    return (
+        [m["name"], _velocity_hpd(m)]
+        + [by_label.get(lbl, "—") for lbl in month_labels]
+        + [f"{m.get('planned_hours', 0):.0f}", f"{m.get('total_capacity_hours', 0):.0f}"]
+    )
+
+
+def _team_table_row(data: Dict[str, Any], month_labels: List[str]) -> List[str]:
+    by_label = {r["month_label"]: _month_cell(r) for r in (data.get("team_coverage") or [])}
+    return (
+        ["TEAM", ""]
+        + [by_label.get(lbl, "—") for lbl in month_labels]
+        + [
+            f"{data.get('total_planned_hours', 0):.0f}",
+            f"{data.get('total_capacity_hours', 0):.0f}",
+        ]
+    )
+
+
+def _format_timeoff_lines(members: List[Dict[str, Any]]) -> List[str]:
+    lines: List[str] = []
+    for m in members:
+        if m.get("time_off"):
+            lines.append(f"_{m['name']}: timeoff {', '.join(m['time_off'])}_")
+    return lines
 
 
 def _format_timeoff_block(leave_from: str, leave_to: str) -> str:
@@ -767,43 +814,43 @@ def format_coverage1_slack(data: Dict[str, Any]) -> str:
             lines.append(f"  • {m.get('name', m)}")
         return "\n".join(lines)
 
-    scope = data.get("scope", "team")
-    team_name = (data.get("team") or {}).get("name") or "Team"
+    month_labels = [
+        _month_label(m) for m in (data.get("months") or [])
+    ]
+    if not month_labels and data.get("team_coverage"):
+        month_labels = [r["month_label"] for r in data["team_coverage"]]
+
+    headers = _coverage_table_headers(month_labels)
     lines: List[str] = []
 
-    if scope == "person" and data.get("members"):
+    if data.get("scope") == "person" and data.get("members"):
         m = data["members"][0]
-        lines.append(f"*{m['name']} Coverage 1*")
+        title = f"*{m['name']} Coverage 1*"
+        if data.get("as_of"):
+            title += f" · {data['as_of']}"
+        lines.append(title)
         lines.append(f"_{data.get('velocity_note', VELOCITY_NOTE)}_")
-        lines.append(f"*{_velocity_hpd(m)}* — {m.get('velocity_label', '')}")
-        lines.append(f"• {_format_month_coverage_bits(m.get('months') or [])}")
-        lines.append(
-            f"  ({_format_planned_capacity_summary(m['planned_hours'], m.get('total_capacity_hours', 0))})"
-        )
-        if m.get("time_off"):
-            lines.append(f"  Time off: {', '.join(m['time_off'])}")
+        table = _slack_table(headers, [_member_table_row(m, month_labels)])
+        lines.append(f"```\n{table}\n```")
+        lines.extend(_format_timeoff_lines([m]))
         return "\n".join(lines)
 
+    team_name = (data.get("team") or {}).get("name") or "Team"
     short_team = team_name.replace("Team ", "").split(" - ")[0].strip()
-    lines.append(f"*Team {short_team} Coverage 1*")
+    title = f"*Team {short_team} Coverage 1*"
+    if data.get("as_of"):
+        title += f" · {data['as_of']}"
+    lines.append(title)
     lines.append(f"_{data.get('velocity_note', VELOCITY_NOTE)}_")
-    lines.append(f"• {_format_month_coverage_bits(data.get('team_coverage') or [])}")
-    lines.append(
-        f"  ({_format_planned_capacity_summary(data.get('total_planned_hours', 0), data.get('total_capacity_hours', 0))})"
+
+    members = sorted(
+        data.get("members") or [],
+        key=lambda x: -(x.get("planned_hours") or 0),
     )
-    members = data.get("members") or []
-    if members:
-        lines.append(f"_{_format_team_velocity_roster(members)}_")
-    for m in members:
-        mb = _format_month_coverage_bits(m.get("months") or [])
-        cap = m.get("total_capacity_hours", 0)
-        line = (
-            f"  ◦ {m['name']} · {_velocity_hpd(m)}: {mb} "
-            f"(planned {m['planned_hours']:.0f} h · avail {cap:.0f} h)"
-        )
-        if m.get("time_off"):
-            line += f" — timeoff: {', '.join(m['time_off'])}"
-        lines.append(line)
+    rows = [_team_table_row(data, month_labels)]
+    rows.extend(_member_table_row(m, month_labels) for m in members)
+    lines.append(f"```\n{_slack_table(headers, rows)}\n```")
+    lines.extend(_format_timeoff_lines(members))
     return "\n".join(lines)
 
 

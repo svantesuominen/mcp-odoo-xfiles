@@ -75,7 +75,7 @@ A Slack bot that posts pre-formatted team status directly to a channel using sla
 | `/weekly` | Last 7 days status |
 | `/monthly` | Last 30 days status |
 | `/quarterly` | Last 90 days status |
-| `/coverage1 [xfiles\|devteam\|pmteam\|Name]` | Coverage 1 for team or person (pipeline workload vs capacity) |
+| `/coverage1 [xfiles\|devteam\|pmteam\|Name]` | Coverage 1 for team or person (code-block table; acks immediately, then fetches) |
 
 Commands are restricted to the channel set in `SLACK_ALLOWED_CHANNEL` (default: `team-x-files`).
 
