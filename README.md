@@ -45,6 +45,8 @@ Continuous Services [weekly/monthly/quarterly] update (Mon 28.3. – Sun 3.4.):
 | `get_client_summary(client_name, years_back)` | Full client dossier: CRM chatter, first sale, projects/hours, active subscription SOs, helpdesk — use with `.cursor/skills/client-summary`. |
 | `list_teams(name_filter)` | List Odoo departments (teams) and Coverage 1 aliases (`xfiles`, `devteam`, `pmteam`, …). |
 | `get_coverage1(team_id?, team_name?, person_name?, months=3)` | Coverage 1: pipeline remaining hours vs capacity (3-month velocity, leave, 3-month forecast) — use with `.cursor/skills/coverage1`. |
+| `search_projects(name_filter)` | Find Odoo projects by name (id + url). |
+| `get_project_update(project_id?, project_name?, limit=1)` | Latest project status update(s) from `project.update` — use with `.cursor/skills/project-update`. |
 | `get_team_backlog()` | Full task backlog for dept 18, grouped by stage and assignee with weeks/months-to-clear estimates (6 h/day capacity). |
 | `get_rd_hours(months)` | Logged R&D timesheet hours by project/task + all open R&D tasks assigned to the team. |
 | `get_issues_analysis(months)` | Multi-month trend analysis: most common, most laborious, and highest-priority helpdesk issues. |
@@ -76,6 +78,7 @@ A Slack bot that posts pre-formatted team status directly to a channel using sla
 | `/monthly` | Last 30 days status |
 | `/quarterly` | Last 90 days status |
 | `/coverage1 [xfiles\|devteam\|pmteam\|Name]` | Coverage 1 for team or person (code-block table; acks immediately, then fetches) |
+| `/projectupdate [project_id\|name]` | Latest project status update (e.g. `/projectupdate 2045`) |
 
 Commands are restricted to the channel set in `SLACK_ALLOWED_CHANNEL` (default: `team-x-files`).
 
@@ -84,7 +87,7 @@ Commands are restricted to the channel set in `SLACK_ALLOWED_CHANNEL` (default: 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps) → Create New App → From scratch
 2. **App Home** → enable "Allow users to send Slash commands and messages from the messages tab" + add a bot user
 3. **Socket Mode** → Enable → Generate App-Level Token (scope: `connections:write`) → copy as `SLACK_APP_TOKEN`
-4. **Slash Commands** → Add `/weekly`, `/monthly`, `/quarterly`, `/coverage1`
+4. **Slash Commands** → Add `/weekly`, `/monthly`, `/quarterly`, `/coverage1`, `/projectupdate`
 5. **OAuth & Permissions** → add Bot Token Scopes: `chat:write`, `commands` → Install to workspace → copy Bot Token as `SLACK_BOT_TOKEN`
 6. Add both tokens to Railway environment variables
 
@@ -119,7 +122,7 @@ This repo runs as **two Railway services** → **two Claude custom connectors**.
 
 | Claude connector name | Railway service | Start command | Example tools |
 | :--- | :--- | :--- | :--- |
-| **Odoo Helpdesk Agent** | `mcp-odoo-xfiles` | `start.sh` → `server.py` | `get_team_status`, **`get_client_summary`**, tickets, backlog, … (**18** tools) |
+| **Odoo Helpdesk Agent** | `mcp-odoo-xfiles` | `start.sh` → `server.py` | `get_team_status`, **`get_client_summary`**, tickets, backlog, … (**20** tools) |
 | **Sales MCP** (or similar) | e.g. `grateful-upliftment` | `python -m sales_mcp` | `search_partner`, `search_lead`, `log_note` only (**3** tools) |
 
 - **Client dossiers** (`get_client_summary`) → **Helpdesk** connector only.
@@ -135,7 +138,7 @@ Claude caches the tool list from the MCP server. If you pushed new tools (e.g. `
 2. Open [Claude.ai](https://claude.ai) → **Customize** → **Connectors**.
 3. Select **Odoo Helpdesk Agent** (not Sales MCP).
 4. Click the **⋮** menu (top right of the connector panel) → **Refresh tools list**.
-5. Under **Tool permissions** → **Other tools**, check the count (helpdesk should show **18** tools, including `get_coverage1` and `get_client_summary`).
+5. Under **Tool permissions** → **Other tools**, check the count (helpdesk should show **20** tools, including `get_project_update`, `get_coverage1`, and `get_client_summary`).
 6. In a **new chat**, enable the Helpdesk connector and ask explicitly, e.g. *“Use get_client_summary for DOHA.”*
 
 Optional: **Disconnect** and re-add the connector with the same `/sse` URL if refresh alone does not update the list.

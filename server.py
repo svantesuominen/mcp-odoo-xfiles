@@ -17,6 +17,10 @@ from odoo_connection import (
 )
 from client_summary import build_client_summary, resolve_partners_by_name
 from coverage1 import list_teams as _list_teams, get_coverage1 as _get_coverage1
+from project_update import (
+    search_projects as _search_projects,
+    get_project_update as _get_project_update,
+)
 
 # Load environment variables (redundant if odoo_connection imported first; safe for GITHUB_TOKEN etc.)
 load_dotenv()
@@ -1887,6 +1891,55 @@ def get_coverage1(
 
 coverage1_fn = get_coverage1
 mcp.tool()(get_coverage1)
+
+
+def search_projects(name_filter: str = "") -> Dict[str, Any]:
+    """
+    Search Odoo delivery projects by name (project.project).
+
+    Returns id, name, partner, url for each match. Use before get_project_update
+    when the user gives a project name instead of a numeric id.
+    """
+    return _search_projects(name_filter)
+
+
+mcp.tool()(search_projects)
+
+
+def get_project_update(
+    project_id: int = None,
+    project_name: str = None,
+    limit: int = 1,
+    update_id: int = None,
+    format: str = "json",
+) -> Union[Dict[str, Any], str]:
+    """
+    Fetch project status update(s) from Odoo (project.update model).
+
+    Each update includes title, date, status (On Track / At Risk / etc.),
+    author, task counts, timesheet hours, progress, and plain-text summary
+    from the HTML description.
+
+    Args:
+        project_id: Numeric project id (e.g. 2045 — same as active_id in Odoo URL).
+        project_name: Partial project name if id unknown.
+        limit: Number of updates, newest first (default 1; max 10).
+        update_id: Fetch one specific update record by id.
+        format: "json" (default) or "slack" for the Slack bot.
+
+    If multiple projects match project_name, returns ambiguous with matches.
+    """
+    return _get_project_update(
+        project_id=project_id,
+        project_name=project_name,
+        limit=limit,
+        update_id=update_id,
+        format=format,
+    )
+
+
+project_update_fn = get_project_update
+mcp.tool()(get_project_update)
 
 
 @mcp.custom_route("/", methods=["GET"])

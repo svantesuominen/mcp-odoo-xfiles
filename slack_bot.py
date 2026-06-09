@@ -6,6 +6,7 @@ Slash commands:
   /monthly   → get_team_status(period="1m",  format="slack")
   /quarterly → get_team_status(period="1q",  format="slack")
   /coverage1 → get_coverage1 (team alias or person name)
+  /projectupdate → get_project_update (project id or name)
 
 Uses Socket Mode — no public URL required.
 Set SLACK_BOT_TOKEN (xoxb-...) and SLACK_APP_TOKEN (xapp-...) in environment.
@@ -97,6 +98,39 @@ async def cmd_coverage1(ack, say, body):
         return
     await ack(text="Computing Coverage 1…")
     asyncio.create_task(_post_coverage1(say, body))
+
+
+async def _post_project_update(say, body: dict):
+    """Fetch project update from Odoo and post (runs after immediate slash-command ack)."""
+    try:
+        from project_update import resolve_slack_project, get_project_update
+
+        text = (body.get("text") or "").strip()
+        target = resolve_slack_project(text)
+        if target.get("error") == "usage":
+            await say(target.get("message", "Usage: /projectupdate 2045 | project name"))
+            return
+        result = get_project_update(
+            project_id=target.get("project_id"),
+            project_name=target.get("project_name"),
+            limit=1,
+            format="slack",
+        )
+        await say(result)
+    except Exception as e:
+        _logger.error("Error fetching project update: %s", e)
+        await say(f":warning: Could not fetch project update: {e}")
+
+
+@app.command("/projectupdate")
+async def cmd_projectupdate(ack, say, body):
+    channel = body.get("channel_name", "")
+    _logger.info("Slash command /projectupdate in channel: %r", channel)
+    if ALLOWED_CHANNEL and channel != ALLOWED_CHANNEL:
+        await ack(text=f"This command only works in #{ALLOWED_CHANNEL}. (you are in: #{channel})")
+        return
+    await ack(text="Fetching project update…")
+    asyncio.create_task(_post_project_update(say, body))
 
 
 async def main():
