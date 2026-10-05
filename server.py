@@ -772,7 +772,6 @@ def get_team_hours(days: int = 7) -> Dict[str, Any]:
         return {'error': f'Error fetching team hours: {str(e)}'}
 
 
-@mcp.tool()
 def get_team_backlog() -> Dict[str, Any]:
     """
     Current snapshot of all project tasks assigned to members of the
@@ -922,6 +921,11 @@ def get_team_backlog() -> Dict[str, Any]:
 
     except Exception as e:
         return {'error': f'Error fetching team backlog: {str(e)}'}
+
+
+# Register without replacing the function — get_team_capacity calls it directly.
+# @mcp.tool() would wrap it as a FunctionTool, which is not callable.
+mcp.tool()(get_team_backlog)
 
 
 def get_department_activities(days: int = 7) -> Dict[str, Any]:
